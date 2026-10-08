@@ -1,0 +1,137 @@
+[
+  {
+    "name": "Potion Brewers Guild",
+    "category": "CLUB",
+    "description": "Weekly brewing sessions where members experiment with rare ingredients and compete in seasonal potion contests.",
+    "min_school_year": 1,
+    "min_free_hours_required": 3,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "KNOWLEDGE", "learning_modality": "PRACTICAL"}
+  },
+  {
+    "name": "Advanced Transmutation",
+    "category": "ADVANCED_CLASS",
+    "description": "Theory and practice of turning one substance into another, from base metals to living tissue.",
+    "min_school_year": 5,
+    "min_free_hours_required": 6,
+    "excluded_specializations": ["HEALING"],
+    "ideal_profile": {"magic_orientation": "POWER", "learning_modality": "THEORETICAL"}
+  },
+  {
+    "name": "Dueling Circle",
+    "category": "CLUB",
+    "description": "Supervised one-on-one dueling practice with ranked tournaments every term.",
+    "min_school_year": 3,
+    "min_free_hours_required": 4,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "POWER", "learning_modality": "PRACTICAL"}
+  },
+  {
+    "name": "Ward Crafting Seminar",
+    "category": "ADVANCED_CLASS",
+    "description": "Designing protective wards for buildings and people, including layered and self-repairing barriers.",
+    "min_school_year": 4,
+    "min_free_hours_required": 5,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "KNOWLEDGE", "learning_modality": "THEORETICAL"}
+  },
+  {
+    "name": "Infirmary Volunteers",
+    "category": "CLUB",
+    "description": "Assist the school healers with minor injuries and learn first-response spellwork.",
+    "min_school_year": 2,
+    "min_free_hours_required": 4,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "ALTRUISM", "learning_modality": "PRACTICAL"}
+  },
+  {
+    "name": "Restorative Magic",
+    "category": "ADVANCED_CLASS",
+    "description": "Advanced healing: regrowing bone, purging curses and treating magical exhaustion.",
+    "min_school_year": 5,
+    "min_free_hours_required": 6,
+    "excluded_specializations": ["CONJURING"],
+    "ideal_profile": {"magic_orientation": "ALTRUISM", "learning_modality": "THEORETICAL"}
+  },
+  {
+    "name": "Familiar Keepers",
+    "category": "CLUB",
+    "description": "Care for the school's magical creatures and learn to bond with a familiar.",
+    "min_school_year": 1,
+    "min_free_hours_required": 2,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "ALTRUISM", "learning_modality": "COLLABORATIVE"}
+  },
+  {
+    "name": "Summoning Theory",
+    "category": "ADVANCED_CLASS",
+    "description": "The binding circles, contracts and safety protocols behind summoning other-planar beings.",
+    "min_school_year": 6,
+    "min_free_hours_required": 5,
+    "excluded_specializations": ["HEALING"],
+    "ideal_profile": {"magic_orientation": "KNOWLEDGE", "learning_modality": "THEORETICAL"}
+  },
+  {
+    "name": "Expedition Society",
+    "category": "CLUB",
+    "description": "Weekend expeditions to the enchanted forest and nearby ruins, mapping and cataloguing magical sites.",
+    "min_school_year": 3,
+    "min_free_hours_required": 6,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "ADVENTURE", "learning_modality": "COLLABORATIVE"}
+  },
+  {
+    "name": "Ancient Runes Study Group",
+    "category": "CLUB",
+    "description": "Members translate runic texts from the library archives together and present their findings.",
+    "min_school_year": 2,
+    "min_free_hours_required": 2,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "KNOWLEDGE", "learning_modality": "COLLABORATIVE"}
+  },
+  {
+    "name": "Battle Alchemy",
+    "category": "ADVANCED_CLASS",
+    "description": "Explosive and defensive concoctions for field use, taught under strict safety rules.",
+    "min_school_year": 6,
+    "min_free_hours_required": 5,
+    "excluded_specializations": ["HEALING"],
+    "ideal_profile": {"magic_orientation": "POWER", "learning_modality": "PRACTICAL"}
+  },
+  {
+    "name": "Skyward Broom Racing",
+    "category": "CLUB",
+    "description": "Competitive broom racing team with training flights three times a week.",
+    "min_school_year": 2,
+    "min_free_hours_required": 8,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "ADVENTURE", "learning_modality": "PRACTICAL"}
+  },
+  {
+    "name": "Defensive Tactics Workshop",
+    "category": "ADVANCED_CLASS",
+    "description": "Team-based scenarios defending against curses, creatures and ambushes.",
+    "min_school_year": 4,
+    "min_free_hours_required": 4,
+    "excluded_specializations": ["ALCHEMY"],
+    "ideal_profile": {"magic_orientation": "ADVENTURE", "learning_modality": "COLLABORATIVE"}
+  },
+  {
+    "name": "Community Spellcraft",
+    "category": "CLUB",
+    "description": "Members use their magic for village projects: mending bridges, purifying wells and helping at the market.",
+    "min_school_year": 1,
+    "min_free_hours_required": 3,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "ALTRUISM", "learning_modality": "COLLABORATIVE"}
+  },
+  {
+    "name": "Arcane Research Fellowship",
+    "category": "ADVANCED_CLASS",
+    "description": "Independent research project supervised by a faculty mentor, ending in a published thesis.",
+    "min_school_year": 7,
+    "min_free_hours_required": 10,
+    "excluded_specializations": [],
+    "ideal_profile": {"magic_orientation": "KNOWLEDGE", "learning_modality": "THEORETICAL"}
+  }
+]
