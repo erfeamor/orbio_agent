@@ -39,7 +39,7 @@ The system is a conversational AI agent that conducts short interviews with stud
     - Use abstract classes for the LLM, STT, TTS and storage, so that implementations are easy to swap
     - Implementations:
         - LLM: Claude, plus a fake LLM for tests
-        - STT: Deepgram Nova-3
+        - STT: Deepgram Nova-3 (default), or ElevenLabs Scribe v2 selected by configuration
         - TTS: ElevenLabs Flash v2.5
         - Storage: JSON files
     - Voice mode: push-to-talk (record → transcribe → reply → speak). Text mode runs the same engine and is used by the tests

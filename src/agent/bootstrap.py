@@ -8,7 +8,7 @@ from agent.engine.engine import Engine
 from agent.llm.claude import ClaudeLLM
 from agent.speech.base import STTClient, TTSClient
 from agent.speech.deepgram import DeepgramSTT
-from agent.speech.elevenlabs import ElevenLabsTTS
+from agent.speech.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from agent.storage.file_repo import JsonFileRepository
 
 
@@ -31,6 +31,14 @@ def build_engine(settings: Settings) -> Engine:
 
 
 def build_stt(settings: Settings) -> STTClient | None:
+    """The provider is chosen with STT_PROVIDER; ElevenLabs reuses the TTS key."""
+    if settings.stt_provider == "elevenlabs":
+        api_key = _secret(settings.elevenlabs_api_key)
+        if api_key is None:
+            return None
+        return ElevenLabsSTT(
+            api_key, model=settings.elevenlabs_stt_model, timeout=settings.speech_timeout_seconds
+        )
     api_key = _secret(settings.deepgram_api_key)
     if api_key is None:
         return None

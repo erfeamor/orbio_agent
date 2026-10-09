@@ -74,7 +74,7 @@ export function DebugPanel({ turn, health }: { turn: TurnResponse | null; health
 
       <p className="muted small status">
         {health
-          ? `Server ok · speech-to-text ${health.speech_to_text ? "on" : "off"} · text-to-speech ${health.text_to_speech ? "on" : "off"}`
+          ? `Server ok · speech-to-text ${health.stt_provider ?? "off"} · text-to-speech ${health.text_to_speech ? "on" : "off"}`
           : "Server not reached"}
         {turn && (
           <>

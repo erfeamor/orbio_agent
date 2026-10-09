@@ -16,6 +16,11 @@ class SpeechError(Exception):
 
 
 class STTClient(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Provider name, reported by /health."""
+
     @abstractmethod
     def transcribe(self, audio: bytes, content_type: str) -> Transcript:
         """Transcribe one audio clip. Raises SpeechError on failure."""

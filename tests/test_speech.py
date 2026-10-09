@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,7 @@ from agent.engine.engine import ConversationNotFoundError, Engine
 from agent.llm.fake import FakeLLM
 from agent.speech.base import SpeechError, Transcript
 from agent.speech.deepgram import DeepgramSTT
-from agent.speech.elevenlabs import ElevenLabsTTS
+from agent.speech.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from agent.speech.fake import FakeSTT, FakeTTS
 from agent.speech.pipeline import HEARING_FAILURE_MESSAGE, VoicePipeline
 from agent.storage.file_repo import JsonFileRepository
@@ -47,6 +48,7 @@ def test_deepgram_sends_audio_and_parses_the_transcript() -> None:
     result = stt.transcribe(b"webm-bytes", "audio/webm")
 
     assert result == Transcript(text="año tres", confidence=0.93, language="es")
+    assert stt.name == "deepgram"
     request = seen[0]
     assert request.headers["Authorization"] == "Token dg-key"
     assert request.headers["Content-Type"] == "audio/webm"
@@ -124,6 +126,84 @@ def test_elevenlabs_network_error() -> None:
     tts = ElevenLabsTTS("k", voice_id="v", client=mock_client(handler))
     with pytest.raises(SpeechError, match="cannot reach ElevenLabs"):
         tts.synthesize("hi")
+
+
+# --- ElevenLabs Scribe (STT) ---
+
+
+def scribe_body(text: str, logprobs: list[float], language: str | None = "es") -> dict[str, Any]:
+    words: list[dict[str, Any]] = []
+    for index, logprob in enumerate(logprobs):
+        words.append({"text": f"w{index}", "type": "word", "logprob": logprob})
+        words.append({"text": " ", "type": "spacing", "logprob": -9.0})
+    return {"text": text, "language_code": language, "language_probability": 0.99, "words": words}
+
+
+def test_scribe_uploads_the_clip_and_parses_the_transcript() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=scribe_body(" año tres ", [0.0, 0.0]))
+
+    stt = ElevenLabsSTT("el-key", client=mock_client(handler))
+    result = stt.transcribe(b"webm-bytes", "audio/webm")
+
+    assert result == Transcript(text="año tres", confidence=1.0, language="es")
+    assert stt.name == "elevenlabs"
+    request = seen[0]
+    assert request.url.path == "/v1/speech-to-text"
+    assert request.headers["xi-api-key"] == "el-key"
+    assert request.headers["Content-Type"].startswith("multipart/form-data")
+    body = request.content
+    assert b'name="model_id"' in body and b"scribe_v2" in body
+    assert b'name="file"' in body and b"webm-bytes" in body
+    assert b"Content-Type: audio/webm" in body
+
+
+def test_scribe_confidence_averages_word_probabilities_ignoring_spacing() -> None:
+    body = scribe_body("two words", [math.log(0.9), math.log(0.5)])
+    stt = ElevenLabsSTT("k", client=mock_client(lambda r: httpx.Response(200, json=body)))
+    assert stt.transcribe(b"x", "audio/webm").confidence == pytest.approx(0.7)
+
+
+@pytest.mark.parametrize(
+    ("body", "confidence", "language"),
+    [
+        ({"text": "", "words": []}, 0.0, None),
+        ({"text": "hello"}, 1.0, None),
+        ({"text": "hello", "words": [{"type": "spacing"}]}, 1.0, None),
+        ({"text": "hello", "language_code": "eng", "words": []}, 1.0, None),
+        ({"text": "hello", "language_code": "EN", "words": []}, 1.0, "en"),
+    ],
+    ids=["empty", "no-words", "no-scored-words", "three-letter-code", "two-letter-code"],
+)
+def test_scribe_edge_cases(body: dict[str, Any], confidence: float, language: str | None) -> None:
+    stt = ElevenLabsSTT("k", client=mock_client(lambda r: httpx.Response(200, json=body)))
+    result = stt.transcribe(b"x", "audio/webm")
+    assert (result.confidence, result.language) == (confidence, language)
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (httpx.Response(401, json={}), "ElevenLabs returned 401"),
+        (httpx.Response(200, json={"words": []}), "unexpected ElevenLabs response"),
+        (httpx.Response(200, content=b"not json"), "unexpected ElevenLabs response"),
+    ],
+)
+def test_scribe_errors_become_speech_errors(response: httpx.Response, message: str) -> None:
+    stt = ElevenLabsSTT("k", client=mock_client(lambda r: response))
+    with pytest.raises(SpeechError, match=message):
+        stt.transcribe(b"x", "audio/webm")
+
+
+def test_scribe_network_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    with pytest.raises(SpeechError, match="cannot reach ElevenLabs"):
+        ElevenLabsSTT("k", client=mock_client(handler)).transcribe(b"x", "audio/webm")
 
 
 # --- Voice pipeline ---

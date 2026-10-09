@@ -12,6 +12,10 @@ class FakeSTT(STTClient):
         self._results = list(results)
         self.calls: list[tuple[bytes, str]] = []
 
+    @property
+    def name(self) -> str:
+        return "fake"
+
     def queue(self, *results: Transcript | Exception) -> None:
         self._results.extend(results)
 

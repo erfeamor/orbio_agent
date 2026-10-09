@@ -125,6 +125,7 @@ def create_app(components: Components | None = None, settings: Settings | None =
         return {
             "status": "ok",
             "speech_to_text": voice is not None,
+            "stt_provider": components.stt.name if components.stt else None,
             "text_to_speech": tts is not None,
         }
 

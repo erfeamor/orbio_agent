@@ -60,7 +60,16 @@ def upload(
 
 def test_health_reports_speech_availability(tmp_path: Path) -> None:
     body = Harness(tmp_path, stt=False).client.get("/health").json()
-    assert body == {"status": "ok", "speech_to_text": False, "text_to_speech": True}
+    assert body == {
+        "status": "ok",
+        "speech_to_text": False,
+        "stt_provider": None,
+        "text_to_speech": True,
+    }
+
+
+def test_health_names_the_stt_provider(h: Harness) -> None:
+    assert h.client.get("/health").json()["stt_provider"] == "fake"
 
 
 def test_start_returns_the_consent_message(h: Harness) -> None:

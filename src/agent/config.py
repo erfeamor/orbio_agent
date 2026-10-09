@@ -22,11 +22,13 @@ class Settings(BaseSettings):
     llm_max_retries: int = 2
 
     # Speech is optional: without keys, the text endpoints still work and replies have no audio.
+    stt_provider: Literal["deepgram", "elevenlabs"] = "deepgram"
     deepgram_api_key: SecretStr | None = None
     deepgram_model: str = "nova-3"
     elevenlabs_api_key: SecretStr | None = None
     elevenlabs_voice_id: str = "JBFqnCBsd6RMkjVDRZzb"
     elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_stt_model: str = "scribe_v2"
     speech_timeout_seconds: float = 15.0
     stt_min_confidence: float = 0.4
 

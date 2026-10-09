@@ -24,7 +24,7 @@ orbio_agent/
 │   │   ├── phases.py       # required vs skippable fields, readiness, frustration
 │   │   └── prompts.py      # interview prompt, one-off prompts, fixed fallback messages
 │   ├── llm/      base.py (LLMClient ABC + errors) · claude.py · fake.py
-│   ├── speech/   base.py (STT, TTS ABCs) · deepgram.py · elevenlabs.py · fake.py · pipeline.py
+│   ├── speech/   base.py (STT, TTS ABCs) · deepgram.py · elevenlabs.py (TTS + STT) · fake.py · pipeline.py
 │   ├── storage/  base.py (ConversationRepository ABC) · file_repo.py · s3_repo.py
 │   └── interfaces/
 │       ├── cli.py          # text only (also what the tests drive)
@@ -101,6 +101,8 @@ When the conversation ends, one LLM call writes 3–6 key points in English for 
 
 - **Deepgram Nova-3** (`deepgram.py`): REST call with `detect_language=true`, for the multiple-languages bonus. The detected tag (`es-ES`) is reduced to the ISO 639-1 code (`es`) the engine uses.
 - **ElevenLabs Flash v2.5** (`elevenlabs.py`): returns MP3; it detects the language from the text, so no language code is sent. The voice is set with `ELEVENLABS_VOICE_ID`.
+- **ElevenLabs Scribe v2** (`elevenlabs.py`, optional STT): selected with `STT_PROVIDER=elevenlabs`, so one ElevenLabs key covers both directions. Scribe has no overall confidence, so the adapter averages the per-word probabilities (`exp(logprob)`, spacing ignored) to keep the same "unclear audio" threshold; 3-letter language codes are dropped. Deepgram stays the default because its free credit is separate, while Scribe shares the free plan's TTS credits.
+- Each STT client reports its `name`, shown by `/health` and in the frontend, so the active provider is visible in the demo.
 - Both use `httpx` with a 15 s timeout and turn every provider failure into a `SpeechError`, so callers handle one error type.
 
 ### Voice pipeline (`speech/pipeline.py`)
@@ -114,7 +116,7 @@ One voice turn: audio → STT → engine → TTS.
 
 ### Wiring (`bootstrap.py`)
 
-Builds the real engine, STT and TTS clients from the settings, so the CLI and the API share one setup and tests can pass fakes instead. Speech is optional: without Deepgram or ElevenLabs keys, the STT/TTS clients are `None`, text still works and replies have no audio. An empty `KEY=` line in `.env` counts as not set.
+Builds the real engine, STT and TTS clients from the settings, so the CLI and the API share one setup and tests can pass fakes instead. `STT_PROVIDER` (`deepgram` default, or `elevenlabs`) picks the speech-to-text adapter. Speech is optional: without Deepgram or ElevenLabs keys, the STT/TTS clients are `None`, text still works and replies have no audio. An empty `KEY=` line in `.env` counts as not set.
 
 ### HTTP API (`interfaces/api.py`)
 
@@ -122,7 +124,7 @@ Builds the real engine, STT and TTS clients from the settings, so the CLI and th
 
 | Endpoint | What it does |
 |---|---|
-| `GET /health` | Status, plus whether STT and TTS are configured |
+| `GET /health` | Status, whether STT and TTS are configured, and the STT provider name |
 | `POST /sessions` | Starts a conversation and returns the consent message; `{"speak": true}` adds audio |
 | `GET /sessions/{id}` | The full saved record |
 | `POST /sessions/{id}/messages` | Text turn: `{"text": "...", "speak": false}` |
@@ -157,7 +159,8 @@ No network: the fake LLM returns queued outputs or errors and records each call'
 - catalog filtering, and the case where nothing passes;
 - dropping recommendations that aren't in the catalog;
 - LLM timeout, malformed output and refusal paths;
-- Deepgram and ElevenLabs request/response handling against a mocked HTTP transport;
+- Deepgram, ElevenLabs TTS and Scribe STT request/response handling against a mocked HTTP transport, including Scribe's confidence averaging and language codes;
+- STT provider selection in `bootstrap.py`;
 - voice pipeline: empty or low-confidence transcript, STT failure, TTS failure, unknown conversation;
 - 2–3 complete scripted conversations;
 - FastAPI tests with `TestClient`: every endpoint, every error status, CORS, with fake STT/TTS;

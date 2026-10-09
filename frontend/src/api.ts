@@ -33,6 +33,7 @@ export interface TurnResponse {
 export interface Health {
   status: string;
   speech_to_text: boolean;
+  stt_provider: string | null;
   text_to_speech: boolean;
 }
 

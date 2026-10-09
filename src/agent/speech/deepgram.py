@@ -22,6 +22,10 @@ class DeepgramSTT(STTClient):
         self._model = model
         self._client = client or httpx.Client(timeout=timeout)
 
+    @property
+    def name(self) -> str:
+        return "deepgram"
+
     def transcribe(self, audio: bytes, content_type: str) -> Transcript:
         try:
             response = self._client.post(
