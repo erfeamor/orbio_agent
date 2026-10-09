@@ -14,11 +14,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# S3 conversation storage (STORAGE=s3), used by the AWS deployment.
+aws = [
+    "boto3>=1.35",
+]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.8",
     "mypy>=1.13",
+    "moto[s3]>=5.0",
+    "boto3-stubs[s3]>=1.35",
 ]
 
 [build-system]

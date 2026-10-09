@@ -40,7 +40,7 @@ class VoicePipeline:
         stt: STTClient,
         tts: TTSClient | None,
         *,
-        min_confidence: float = 0.4,
+        min_confidence: float,
     ) -> None:
         self._engine = engine
         self._stt = stt

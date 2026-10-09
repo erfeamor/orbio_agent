@@ -11,7 +11,7 @@ from agent.domain.models import ExtractedFields, Intent, Sentiment, TurnOutput
 from agent.engine import prompts
 from agent.engine.engine import ConversationNotFoundError, Engine
 from agent.llm.fake import FakeLLM
-from agent.speech.base import SpeechError, Transcript
+from agent.speech.base import SpeechError, STTClient, Transcript, TTSClient
 from agent.speech.deepgram import DeepgramSTT
 from agent.speech.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from agent.speech.fake import FakeSTT, FakeTTS
@@ -23,6 +23,24 @@ CATALOG = load_catalog(Path(__file__).parents[1] / "data" / "catalog.json")
 
 def mock_client(handler: Any) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def deepgram(api_key: str, *, client: httpx.Client) -> DeepgramSTT:
+    return DeepgramSTT(api_key, model="nova-3", timeout=5.0, client=client)
+
+
+def elevenlabs_tts(api_key: str, *, voice_id: str, client: httpx.Client) -> ElevenLabsTTS:
+    return ElevenLabsTTS(
+        api_key, voice_id=voice_id, model="eleven_flash_v2_5", timeout=5.0, client=client
+    )
+
+
+def scribe(api_key: str, *, client: httpx.Client) -> ElevenLabsSTT:
+    return ElevenLabsSTT(api_key, model="scribe_v2", timeout=5.0, client=client)
+
+
+def pipeline(engine: Engine, stt: STTClient, tts: TTSClient | None) -> VoicePipeline:
+    return VoicePipeline(engine, stt, tts, min_confidence=0.4)
 
 
 def deepgram_body(transcript: str, confidence: float, language: str | None) -> dict[str, Any]:
@@ -44,7 +62,7 @@ def test_deepgram_sends_audio_and_parses_the_transcript() -> None:
         seen.append(request)
         return httpx.Response(200, json=deepgram_body(" año tres ", 0.93, "es-ES"))
 
-    stt = DeepgramSTT("dg-key", client=mock_client(handler))
+    stt = deepgram("dg-key", client=mock_client(handler))
     result = stt.transcribe(b"webm-bytes", "audio/webm")
 
     assert result == Transcript(text="año tres", confidence=0.93, language="es")
@@ -58,7 +76,7 @@ def test_deepgram_sends_audio_and_parses_the_transcript() -> None:
 
 
 def test_deepgram_without_detected_language() -> None:
-    stt = DeepgramSTT(
+    stt = deepgram(
         "k", client=mock_client(lambda r: httpx.Response(200, json=deepgram_body("hi", 0.9, None)))
     )
     assert stt.transcribe(b"x", "audio/wav").language is None
@@ -73,7 +91,7 @@ def test_deepgram_without_detected_language() -> None:
     ],
 )
 def test_deepgram_errors_become_speech_errors(response: httpx.Response, message: str) -> None:
-    stt = DeepgramSTT("k", client=mock_client(lambda r: response))
+    stt = deepgram("k", client=mock_client(lambda r: response))
     with pytest.raises(SpeechError, match=message):
         stt.transcribe(b"x", "audio/wav")
 
@@ -83,7 +101,7 @@ def test_deepgram_network_error() -> None:
         raise httpx.ConnectTimeout("timed out", request=request)
 
     with pytest.raises(SpeechError, match="cannot reach Deepgram"):
-        DeepgramSTT("k", client=mock_client(handler)).transcribe(b"x", "audio/wav")
+        deepgram("k", client=mock_client(handler)).transcribe(b"x", "audio/wav")
 
 
 # --- ElevenLabs ---
@@ -96,7 +114,7 @@ def test_elevenlabs_returns_mp3_bytes() -> None:
         seen.append(request)
         return httpx.Response(200, content=b"ID3mp3")
 
-    tts = ElevenLabsTTS("el-key", voice_id="voice123", client=mock_client(handler))
+    tts = elevenlabs_tts("el-key", voice_id="voice123", client=mock_client(handler))
 
     assert tts.synthesize("Hola") == b"ID3mp3"
     assert tts.media_type == "audio/mpeg"
@@ -114,7 +132,7 @@ def test_elevenlabs_returns_mp3_bytes() -> None:
     ],
 )
 def test_elevenlabs_errors_become_speech_errors(response: httpx.Response, message: str) -> None:
-    tts = ElevenLabsTTS("k", voice_id="v", client=mock_client(lambda r: response))
+    tts = elevenlabs_tts("k", voice_id="v", client=mock_client(lambda r: response))
     with pytest.raises(SpeechError, match=message):
         tts.synthesize("hi")
 
@@ -123,7 +141,7 @@ def test_elevenlabs_network_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
-    tts = ElevenLabsTTS("k", voice_id="v", client=mock_client(handler))
+    tts = elevenlabs_tts("k", voice_id="v", client=mock_client(handler))
     with pytest.raises(SpeechError, match="cannot reach ElevenLabs"):
         tts.synthesize("hi")
 
@@ -146,7 +164,7 @@ def test_scribe_uploads_the_clip_and_parses_the_transcript() -> None:
         seen.append(request)
         return httpx.Response(200, json=scribe_body(" año tres ", [0.0, 0.0]))
 
-    stt = ElevenLabsSTT("el-key", client=mock_client(handler))
+    stt = scribe("el-key", client=mock_client(handler))
     result = stt.transcribe(b"webm-bytes", "audio/webm")
 
     assert result == Transcript(text="año tres", confidence=1.0, language="es")
@@ -163,7 +181,7 @@ def test_scribe_uploads_the_clip_and_parses_the_transcript() -> None:
 
 def test_scribe_confidence_averages_word_probabilities_ignoring_spacing() -> None:
     body = scribe_body("two words", [math.log(0.9), math.log(0.5)])
-    stt = ElevenLabsSTT("k", client=mock_client(lambda r: httpx.Response(200, json=body)))
+    stt = scribe("k", client=mock_client(lambda r: httpx.Response(200, json=body)))
     assert stt.transcribe(b"x", "audio/webm").confidence == pytest.approx(0.7)
 
 
@@ -179,7 +197,7 @@ def test_scribe_confidence_averages_word_probabilities_ignoring_spacing() -> Non
     ids=["empty", "no-words", "no-scored-words", "three-letter-code", "two-letter-code"],
 )
 def test_scribe_edge_cases(body: dict[str, Any], confidence: float, language: str | None) -> None:
-    stt = ElevenLabsSTT("k", client=mock_client(lambda r: httpx.Response(200, json=body)))
+    stt = scribe("k", client=mock_client(lambda r: httpx.Response(200, json=body)))
     result = stt.transcribe(b"x", "audio/webm")
     assert (result.confidence, result.language) == (confidence, language)
 
@@ -193,7 +211,7 @@ def test_scribe_edge_cases(body: dict[str, Any], confidence: float, language: st
     ],
 )
 def test_scribe_errors_become_speech_errors(response: httpx.Response, message: str) -> None:
-    stt = ElevenLabsSTT("k", client=mock_client(lambda r: response))
+    stt = scribe("k", client=mock_client(lambda r: response))
     with pytest.raises(SpeechError, match=message):
         stt.transcribe(b"x", "audio/webm")
 
@@ -203,7 +221,7 @@ def test_scribe_network_error() -> None:
         raise httpx.ReadTimeout("slow", request=request)
 
     with pytest.raises(SpeechError, match="cannot reach ElevenLabs"):
-        ElevenLabsSTT("k", client=mock_client(handler)).transcribe(b"x", "audio/webm")
+        scribe("k", client=mock_client(handler)).transcribe(b"x", "audio/webm")
 
 
 # --- Voice pipeline ---
@@ -231,7 +249,7 @@ def test_pipeline_runs_stt_engine_and_tts(engine_and_llm: tuple[Engine, FakeLLM]
     stt, tts = FakeSTT([Transcript("yes please", 0.95, "en")]), FakeTTS()
     llm.queue(confirm_turn())
 
-    turn = VoicePipeline(engine, stt, tts).handle(conversation_id, b"clip", "audio/webm")
+    turn = pipeline(engine, stt, tts).handle(conversation_id, b"clip", "audio/webm")
 
     assert turn.transcript == "yes please"
     assert turn.reply == "Great! Which year are you in?"
@@ -248,7 +266,7 @@ def test_unclear_audio_asks_again_without_a_turn(
     engine, llm = engine_and_llm
     start = engine.start().record
 
-    turn = VoicePipeline(engine, FakeSTT([transcript]), FakeTTS()).handle(
+    turn = pipeline(engine, FakeSTT([transcript]), FakeTTS()).handle(
         start.id, b"clip", "audio/webm"
     )
 
@@ -262,7 +280,7 @@ def test_stt_failure_asks_again(engine_and_llm: tuple[Engine, FakeLLM]) -> None:
     conversation_id = engine.start().record.id
     stt = FakeSTT([SpeechError("down")])
 
-    turn = VoicePipeline(engine, stt, FakeTTS()).handle(conversation_id, b"clip", "audio/webm")
+    turn = pipeline(engine, stt, FakeTTS()).handle(conversation_id, b"clip", "audio/webm")
 
     assert turn.reply == HEARING_FAILURE_MESSAGE
     assert turn.transcript is None
@@ -274,9 +292,7 @@ def test_tts_failure_still_returns_the_text(engine_and_llm: tuple[Engine, FakeLL
     llm.queue(confirm_turn())
     stt = FakeSTT([Transcript("yes", 0.9)])
 
-    turn = VoicePipeline(engine, stt, FakeTTS(fail=True)).handle(
-        conversation_id, b"clip", "audio/webm"
-    )
+    turn = pipeline(engine, stt, FakeTTS(fail=True)).handle(conversation_id, b"clip", "audio/webm")
 
     assert turn.reply == "Great! Which year are you in?"
     assert turn.audio is None
@@ -288,5 +304,5 @@ def test_unknown_conversation_is_rejected_before_transcribing(
     engine, _ = engine_and_llm
     stt = FakeSTT()
     with pytest.raises(ConversationNotFoundError):
-        VoicePipeline(engine, stt, None).handle("0" * 32, b"clip", "audio/webm")
+        pipeline(engine, stt, None).handle("0" * 32, b"clip", "audio/webm")
     assert stt.calls == []

@@ -22,11 +22,15 @@ from agent.engine.engine import ConversationNotFoundError, Engine
 from agent.llm.base import LLMConfigurationError
 from agent.speech.base import STTClient, TTSClient
 from agent.speech.pipeline import VoicePipeline, speak_or_none
-from agent.storage.base import VersionConflictError
+from agent.storage.base import (
+    CONVERSATION_ID_PATTERN,
+    StorageUnavailableError,
+    VersionConflictError,
+)
 
 logger = logging.getLogger(__name__)
 
-ConversationId = Annotated[str, Path(pattern=r"^[0-9a-f]{32}$")]
+ConversationId = Annotated[str, Path(pattern=CONVERSATION_ID_PATTERN.pattern)]
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,13 @@ def create_app(components: Components | None = None, settings: Settings | None =
         return JSONResponse(
             status_code=409,
             content={"detail": "the conversation changed while this message was processed"},
+        )
+
+    @app.exception_handler(StorageUnavailableError)
+    def storage_unavailable(_: Request, exc: StorageUnavailableError) -> JSONResponse:
+        logger.error("storage unavailable: %s", exc)
+        return JSONResponse(
+            status_code=503, content={"detail": "storage is temporarily unavailable, try again"}
         )
 
     @app.exception_handler(LLMConfigurationError)

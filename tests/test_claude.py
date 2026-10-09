@@ -46,7 +46,13 @@ def response(text: str, stop_reason: str = "end_turn") -> SimpleNamespace:
 def make_llm(*outcomes: Any) -> tuple[ClaudeLLM, FakeMessages]:
     messages = FakeMessages(list(outcomes))
     client = SimpleNamespace(messages=messages)
-    return ClaudeLLM("test-model", client=client), messages  # type: ignore[arg-type]
+    return ClaudeLLM(
+        "test-model",
+        effort="low",
+        timeout=5.0,
+        max_retries=0,
+        client=client,  # type: ignore[arg-type]
+    ), messages
 
 
 def generate(llm: ClaudeLLM) -> Answer:

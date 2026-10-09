@@ -14,7 +14,7 @@ from agent.llm.base import LLMConfigurationError
 from agent.llm.fake import FakeLLM
 from agent.speech.base import Transcript
 from agent.speech.fake import FakeSTT, FakeTTS
-from agent.storage.base import VersionConflictError
+from agent.storage.base import StorageUnavailableError, VersionConflictError
 from agent.storage.file_repo import JsonFileRepository
 
 CATALOG = load_catalog(Path(__file__).parents[1] / "data" / "catalog.json")
@@ -203,3 +203,18 @@ def test_cors_rejects_other_origins(h: Harness) -> None:
         headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
     )
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_storage_failure_is_503_without_details(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conversation_id = h.start()
+
+    def unavailable(conversation_id: str, text: str) -> None:
+        raise StorageUnavailableError("cannot write conversations/secret-key: AccessDenied")
+
+    monkeypatch.setattr(h.engine, "handle_turn", unavailable)
+    response = h.client.post(f"/sessions/{conversation_id}/messages", json={"text": "hi"})
+
+    assert response.status_code == 503
+    assert "AccessDenied" not in response.text

@@ -37,9 +37,9 @@ class ClaudeLLM(LLMClient):
         self,
         model: str,
         *,
-        effort: Effort = "low",
-        timeout: float = 20.0,
-        max_retries: int = 2,
+        effort: Effort,
+        timeout: float,
+        max_retries: int,
         api_key: str | None = None,
         client: anthropic.Anthropic | None = None,
     ) -> None:

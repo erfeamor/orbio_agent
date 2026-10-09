@@ -14,8 +14,8 @@ class DeepgramSTT(STTClient):
         self,
         api_key: str,
         *,
-        model: str = "nova-3",
-        timeout: float = 15.0,
+        model: str,
+        timeout: float,
         client: httpx.Client | None = None,
     ) -> None:
         self._api_key = api_key

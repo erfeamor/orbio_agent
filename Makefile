@@ -9,7 +9,7 @@ $(BIN)/python:
 	$(BIN)/pip install -q --upgrade pip
 
 install: $(BIN)/python
-	$(BIN)/pip install -q -e ".[dev]"
+	$(BIN)/pip install -q -e ".[dev,aws]"
 
 test:
 	$(BIN)/pytest --cov=agent --cov-report=term-missing --cov-fail-under=90

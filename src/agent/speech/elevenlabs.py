@@ -16,8 +16,8 @@ class ElevenLabsTTS(TTSClient):
         api_key: str,
         *,
         voice_id: str,
-        model: str = "eleven_flash_v2_5",
-        timeout: float = 15.0,
+        model: str,
+        timeout: float,
         client: httpx.Client | None = None,
     ) -> None:
         self._api_key = api_key
@@ -55,8 +55,8 @@ class ElevenLabsSTT(STTClient):
         self,
         api_key: str,
         *,
-        model: str = "scribe_v2",
-        timeout: float = 15.0,
+        model: str,
+        timeout: float,
         client: httpx.Client | None = None,
     ) -> None:
         self._api_key = api_key

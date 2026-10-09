@@ -25,7 +25,7 @@ orbio_agent/
 │   │   └── prompts.py      # interview prompt, one-off prompts, fixed fallback messages
 │   ├── llm/      base.py (LLMClient ABC + errors) · claude.py · fake.py
 │   ├── speech/   base.py (STT, TTS ABCs) · deepgram.py · elevenlabs.py (TTS + STT) · fake.py · pipeline.py
-│   ├── storage/  base.py (ConversationRepository ABC) · file_repo.py · s3_repo.py
+│   ├── storage/  base.py (ConversationRepository ABC, id validation, errors) · file_repo.py · s3_repo.py
 │   └── interfaces/
 │       ├── cli.py          # text only (also what the tests drive)
 │       └── api.py          # FastAPI: used by the frontend, deployed to AWS
@@ -97,6 +97,13 @@ When the conversation ends, one LLM call writes 3–6 key points in English for 
 - Each call logs latency, token counts and the request id.
 - The API key is read from `.env` by the settings and passed to the client, because the SDK only reads the real environment.
 
+### Storage (`storage/`)
+
+- **`ConversationRepository`** (`base.py`): `get` and `save`, where `save` only succeeds if the stored version still matches the record's (optimistic concurrency), then increments it. `base.py` also holds the shared conversation-id check (32 hex characters, used by both repositories and the API path), `VersionConflictError` (409) and `StorageUnavailableError` (503).
+- **`JsonFileRepository`** (`file_repo.py`, `STORAGE=file`, default): one file per conversation, written to a temp file then renamed. The version check is protected by an in-process lock, so it is safe with one server process.
+- **`S3ConversationRepository`** (`s3_repo.py`, `STORAGE=s3`): one object per conversation under `S3_PREFIX`, encrypted (SSE-S3), with the record version in the object metadata. Writes are conditional, so it is safe across processes and Lambda instances without locks: creating uses `IfNoneMatch="*"`; updating checks the stored version with `HeadObject`, then writes with `IfMatch=<ETag>`, so a write landing in between fails. S3 errors become `StorageUnavailableError`. boto3 is an optional extra (`aws`), imported only when `STORAGE=s3`; the client is built in `bootstrap.py` with timeouts and retries from settings.
+- `STORAGE=s3` without `S3_BUCKET` fails when settings load; `S3_PREFIX` always ends in `/`.
+
 ### Speech (`speech/`)
 
 - **Deepgram Nova-3** (`deepgram.py`): REST call with `detect_language=true`, for the multiple-languages bonus. The detected tag (`es-ES`) is reduced to the ISO 639-1 code (`es`) the engine uses.
@@ -116,7 +123,7 @@ One voice turn: audio → STT → engine → TTS.
 
 ### Wiring (`bootstrap.py`)
 
-Builds the real engine, STT and TTS clients from the settings, so the CLI and the API share one setup and tests can pass fakes instead. `STT_PROVIDER` (`deepgram` default, or `elevenlabs`) picks the speech-to-text adapter. Speech is optional: without Deepgram or ElevenLabs keys, the STT/TTS clients are `None`, text still works and replies have no audio. An empty `KEY=` line in `.env` counts as not set.
+Builds the real engine (LLM and repository), STT and TTS clients from the settings, so the CLI and the API share one setup and tests can pass fakes instead. `build_repository` picks the backend from `STORAGE` with a `match` ending in `assert_never`, so adding a backend to the setting without handling it fails `make typecheck`. `STT_PROVIDER` (`deepgram` default, or `elevenlabs`) picks the speech-to-text adapter. Speech is optional: without Deepgram or ElevenLabs keys, the STT/TTS clients are `None`, text still works and replies have no audio. An empty `KEY=` line in `.env` counts as not set.
 
 ### HTTP API (`interfaces/api.py`)
 
@@ -141,7 +148,7 @@ Builds the real engine, STT and TTS clients from the settings, so the CLI and th
 
 | Piece | Choice |
 |---|---|
-| Python and dependencies | Python 3.12 in `.venv` (`make install`), `anthropic`, `pydantic`, `pydantic-settings`, `fastapi`, `uvicorn`, `python-multipart`, `httpx`, `boto3` |
+| Python and dependencies | Python 3.12 in `.venv` (`make install` installs the `dev` and `aws` extras), `anthropic`, `pydantic`, `pydantic-settings`, `fastapi`, `uvicorn`, `python-multipart`, `httpx`; `boto3` in the optional `aws` extra |
 | Voice | The React frontend in the browser (see section 4). No audio libraries on the Python side |
 | Frontend | Node 20+, Vite + React + TypeScript; `npm run dev` on :5173 |
 | Storage | `STORAGE=file` saves to `./conversations/{id}.json`. Writes go to a temp file then are renamed (no half-written records), and only generated ids are accepted (no path traversal) |
@@ -164,7 +171,8 @@ No network: the fake LLM returns queued outputs or errors and records each call'
 - voice pipeline: empty or low-confidence transcript, STT failure, TTS failure, unknown conversation;
 - 2–3 complete scripted conversations;
 - FastAPI tests with `TestClient`: every endpoint, every error status, CORS, with fake STT/TTS;
-- the S3 repository tested with `moto`, which mocks AWS.
+- shared repository tests run against both the file and S3 repositories (S3 mocked with `moto`, which enforces conditional writes), plus S3-specific tests: object format, a write landing between the version check and the save, missing version metadata, and S3 errors becoming `StorageUnavailableError`;
+- storage selection and S3 settings validation.
 
 ## 4. Voice frontend (React)
 
