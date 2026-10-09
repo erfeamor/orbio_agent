@@ -2,27 +2,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from factories import EN, make_engine, sent_state, turn
 
-from agent.domain.catalog import load_catalog
-from agent.domain.models import (
-    ExtractedFields,
-    Intent,
-    Phase,
-    Recommendation,
-    RecommendationOutput,
-    ReplyOutput,
-    Sentiment,
-    SummaryOutput,
-    TurnOutput,
-)
+from agent.domain.models import EndReason, Intent, Phase, Recommendation, Sentiment
 from agent.engine import prompts
 from agent.engine.engine import ConversationNotFoundError, Engine
+from agent.engine.messages import MESSAGES
+from agent.engine.schemas import RecommendationOutput, ReplyOutput, SummaryOutput
 from agent.llm.base import LLMOutputError, LLMRefusalError, LLMUnavailableError
 from agent.llm.fake import FakeLLM
 from agent.storage.base import VersionConflictError
 from agent.storage.file_repo import JsonFileRepository
-
-CATALOG = load_catalog(Path(__file__).parents[1] / "data" / "catalog.json")
 
 FULL_PROFILE: dict[str, Any] = {
     "school_year": 4,
@@ -34,32 +24,19 @@ FULL_PROFILE: dict[str, Any] = {
 }
 
 
-def turn(
-    intent: Intent = Intent.ANSWER,
-    reply: str = "llm reply",
-    sentiment: Sentiment = Sentiment.NEUTRAL,
-    language: str = "en",
-    refused: list[str] | None = None,
-    **extracted: Any,
-) -> TurnOutput:
-    return TurnOutput(
-        extracted=ExtractedFields(**extracted),
-        reply=reply,
-        intent=intent,
-        sentiment=sentiment,
-        language=language,
-        refused_fields=refused or [],
-    )
-
-
 @pytest.fixture
 def llm() -> FakeLLM:
     return FakeLLM()
 
 
 @pytest.fixture
-def engine(llm: FakeLLM, tmp_path: Path) -> Engine:
-    return Engine(llm, JsonFileRepository(tmp_path), CATALOG)
+def repository(tmp_path: Path) -> JsonFileRepository:
+    return JsonFileRepository(tmp_path)
+
+
+@pytest.fixture
+def engine(llm: FakeLLM, repository: JsonFileRepository) -> Engine:
+    return make_engine(llm, repository)
 
 
 def start_collecting(engine: Engine, llm: FakeLLM) -> str:
@@ -79,7 +56,7 @@ def reach_confirmation(engine: Engine, llm: FakeLLM) -> str:
 
 def test_start_saves_a_conversation_with_the_consent_message(engine: Engine) -> None:
     result = engine.start()
-    assert result.reply == prompts.CONSENT_MESSAGE
+    assert result.reply == EN.consent
     assert result.record.phase is Phase.CONSENT
     assert result.record.version == 1
     assert result.record.model == "fake"
@@ -139,7 +116,7 @@ def test_invalid_value_is_kept_out_of_the_profile_and_reported(
 
     llm.queue(turn(school_year=7))
     engine.handle_turn(conversation_id, "sorry, 7")
-    assert "Rejected values from the last message: school_year" in llm.calls[-1].system
+    assert "Rejected values from the last message: school_year" in sent_state(llm.calls[-1])
 
 
 def test_correction_during_confirmation_confirms_again(engine: Engine, llm: FakeLLM) -> None:
@@ -201,7 +178,7 @@ def test_declining_consent_ends_the_conversation(engine: Engine, llm: FakeLLM) -
     assert result.record.summary is None
 
     later = engine.handle_turn(conversation_id, "hello?")
-    assert later.reply == prompts.FINISHED_MESSAGE
+    assert later.reply == EN.finished
     assert len(llm.calls) == 1
 
 
@@ -221,7 +198,7 @@ def test_llm_failure_leaves_the_stored_record_unchanged(engine: Engine, llm: Fak
 
     result = engine.handle_turn(conversation_id, "year 3")
 
-    assert result.reply == prompts.LLM_FAILURE_MESSAGE
+    assert result.reply == EN.llm_failure
     assert result.record.version == 2
     assert result.record.transcript[-1].role == "agent"
 
@@ -229,8 +206,8 @@ def test_llm_failure_leaves_the_stored_record_unchanged(engine: Engine, llm: Fak
 @pytest.mark.parametrize(
     ("error", "message"),
     [
-        (LLMRefusalError("no"), prompts.REFUSAL_MESSAGE),
-        (LLMOutputError("bad json"), prompts.LLM_FAILURE_MESSAGE),
+        (LLMRefusalError("no"), EN.refusal),
+        (LLMOutputError("bad json"), EN.llm_failure),
     ],
 )
 def test_llm_errors_map_to_fixed_replies(
@@ -243,7 +220,7 @@ def test_llm_errors_map_to_fixed_replies(
 
 @pytest.mark.parametrize(
     ("text", "message"),
-    [("   ", prompts.EMPTY_INPUT_MESSAGE), ("x" * 2001, prompts.TOO_LONG_MESSAGE)],
+    [("   ", EN.empty_input), ("x" * 2001, EN.too_long)],
 )
 def test_invalid_input_is_answered_without_calling_the_llm(
     engine: Engine, llm: FakeLLM, text: str, message: str
@@ -277,7 +254,7 @@ def test_invented_recommendations_are_dropped(engine: Engine, llm: FakeLLM) -> N
 
     assert [r.name for r in result.record.recommendations] == ["Dueling Circle"]
     assert "Dragon Riding" not in result.reply
-    assert result.reply == prompts.fallback_recommendations(result.record.recommendations)
+    assert result.reply == EN.fallback_recommendations(result.record.recommendations)
 
 
 def test_recommendation_failure_falls_back_to_deterministic_ranking(
@@ -337,8 +314,8 @@ def test_frustration_changes_the_prompt(engine: Engine, llm: FakeLLM) -> None:
     llm.queue(turn())
     engine.handle_turn(conversation_id, "fine")
 
-    assert "seems frustrated" in llm.calls[-1].system
-    assert "seems frustrated" not in llm.calls[-2].system
+    assert "seems frustrated" in sent_state(llm.calls[-1])
+    assert "seems frustrated" not in sent_state(llm.calls[-2])
 
 
 def test_language_is_tracked_from_the_student(engine: Engine, llm: FakeLLM) -> None:
@@ -414,7 +391,7 @@ def test_confirmation_failure_uses_the_fallback_message(engine: Engine, llm: Fak
     result = engine.handle_turn(conversation_id, "everything")
 
     assert result.record.phase is Phase.CONFIRMING
-    assert result.reply == prompts.fallback_confirmation(result.record)
+    assert result.reply == EN.fallback_confirmation(result.record.profile)
     assert "school year: 4" in result.reply
 
 
@@ -429,19 +406,21 @@ def test_no_match_failure_uses_the_fallback_message(engine: Engine, llm: FakeLLM
 
     result = engine.handle_turn(conversation_id, "yes")
 
-    assert result.reply == prompts.fallback_recommendations([])
+    assert result.reply == EN.fallback_recommendations([])
     assert result.record.phase is Phase.DONE
 
 
 def test_concurrent_turns_on_the_same_conversation_conflict(
-    engine: Engine, llm: FakeLLM, monkeypatch: pytest.MonkeyPatch
+    engine: Engine,
+    llm: FakeLLM,
+    repository: JsonFileRepository,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stale = engine.start().record
     llm.queue(turn(Intent.CONFIRM))
     engine.handle_turn(stale.id, "yes")  # another request moved it to version 2
 
     # The engine reads the stale copy; save() then checks against the real stored version.
-    repository = engine._repository
     real_get = repository.get
     reads = iter([stale])
     monkeypatch.setattr(repository, "get", lambda cid: next(reads, None) or real_get(cid))
@@ -449,3 +428,124 @@ def test_concurrent_turns_on_the_same_conversation_conflict(
 
     with pytest.raises(VersionConflictError):
         engine.handle_turn(stale.id, "yes again")
+
+
+def test_end_reasons(engine: Engine, llm: FakeLLM) -> None:
+    declined = engine.start().record.id
+    llm.queue(turn(Intent.REJECT))
+    assert engine.handle_turn(declined, "no").record.end_reason is EndReason.DECLINED
+
+    stopped = start_collecting(engine, llm)
+    llm.queue(turn(Intent.STOP), SummaryOutput(key_points=["s"]))
+    assert engine.handle_turn(stopped, "stop").record.end_reason is EndReason.STOPPED
+
+    completed = reach_confirmation(engine, llm)
+    llm.queue(
+        turn(Intent.CONFIRM),
+        RecommendationOutput(
+            recommendations=[Recommendation(name="Dueling Circle", reason="r")], reply="Done!"
+        ),
+        SummaryOutput(key_points=["s"]),
+    )
+    assert engine.handle_turn(completed, "yes").record.end_reason is EndReason.COMPLETED
+
+
+def test_summary_is_written_after_the_final_reply(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = start_collecting(engine, llm)
+    llm.queue(turn(Intent.STOP, reply="Goodbye and good luck!"), SummaryOutput(key_points=["s"]))
+
+    engine.handle_turn(conversation_id, "I want to stop")
+
+    summary_prompt = llm.calls[-1].messages[0].content
+    assert "Goodbye and good luck!" in summary_prompt
+
+
+def test_stopping_again_after_the_end_does_not_rewrite_the_summary(
+    engine: Engine, llm: FakeLLM
+) -> None:
+    conversation_id = start_collecting(engine, llm)
+    llm.queue(turn(Intent.STOP), SummaryOutput(key_points=["first"]))
+    engine.handle_turn(conversation_id, "stop")
+    llm.queue(turn(Intent.STOP, reply="Bye again"))
+
+    result = engine.handle_turn(conversation_id, "stop!")
+
+    assert result.reply == "Bye again"
+    assert result.record.summary == ["first"]
+    assert llm.pending == 0
+
+
+def test_correction_after_the_end_reopens_the_conversation(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = reach_confirmation(engine, llm)
+    llm.queue(
+        turn(Intent.CONFIRM),
+        RecommendationOutput(
+            recommendations=[Recommendation(name="Dueling Circle", reason="r")], reply="Done!"
+        ),
+        SummaryOutput(key_points=["s"]),
+    )
+    engine.handle_turn(conversation_id, "yes")
+    llm.queue(turn(Intent.CORRECTION, school_year=6), ReplyOutput(reply="Year 6. Right?"))
+
+    record = engine.handle_turn(conversation_id, "I'm in year 6").record
+
+    assert record.phase is Phase.CONFIRMING
+    assert record.end_reason is None
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"), [("es-ES", "es"), ("es", "es"), ("fr", "fr"), ("not a code", "en")]
+)
+def test_start_language_picks_the_consent_text(
+    engine: Engine, language: str, expected: str
+) -> None:
+    result = engine.start(language)
+    assert result.record.language == expected
+    assert result.reply == MESSAGES.get(expected, EN).consent
+
+
+def test_fixed_replies_follow_the_conversation_language(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = engine.start("es").record.id
+    llm.queue(LLMUnavailableError("down"))
+
+    assert engine.handle_turn(conversation_id, "hola").reply == MESSAGES["es"].llm_failure
+    assert engine.handle_turn(conversation_id, "   ").reply == MESSAGES["es"].empty_input
+
+
+def test_deterministic_fallback_reasons_are_localized(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = engine.start("es").record.id
+    llm.queue(turn(Intent.CONFIRM, language="es"))
+    engine.handle_turn(conversation_id, "sí")
+    llm.queue(turn(language="es", **FULL_PROFILE), ReplyOutput(reply="¿Correcto?"))
+    engine.handle_turn(conversation_id, "todo")
+    llm.queue(
+        turn(Intent.CONFIRM, language="es"),
+        LLMUnavailableError("down"),
+        SummaryOutput(key_points=["s"]),
+    )
+
+    result = engine.handle_turn(conversation_id, "sí")
+
+    assert result.reply.startswith("Te recomiendo:")
+    assert "encaja con tu impulso POWER" in result.record.recommendations[0].reason
+
+
+def test_follow_up_questions_see_the_recommended_entries_descriptions(
+    engine: Engine, llm: FakeLLM
+) -> None:
+    conversation_id = reach_confirmation(engine, llm)
+    llm.queue(
+        turn(Intent.CONFIRM),
+        RecommendationOutput(
+            recommendations=[Recommendation(name="Dueling Circle", reason="you love duels")],
+            reply="Done!",
+        ),
+        SummaryOutput(key_points=["s"]),
+    )
+    engine.handle_turn(conversation_id, "yes")
+    llm.queue(turn(Intent.OFF_TOPIC))
+
+    engine.handle_turn(conversation_id, "what do they do in the dueling circle?")
+
+    state = sent_state(llm.calls[-1])
+    assert "- Dueling Circle: you love duels. [CLUB] Supervised one-on-one dueling" in state

@@ -1,7 +1,6 @@
 """Text interface: chat with the advisor in the terminal."""
 
 import argparse
-import logging
 import sys
 
 from agent.bootstrap import build_engine
@@ -9,6 +8,7 @@ from agent.config import Settings
 from agent.domain.models import Phase
 from agent.engine.engine import ConversationNotFoundError
 from agent.llm.base import LLMConfigurationError
+from agent.logging_config import configure_logging
 
 EXIT_WORDS = {"exit", "quit", "/exit", "/quit"}
 
@@ -19,11 +19,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-v", "--verbose", action="store_true", help="show LLM call logs")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
     settings = Settings()
+    configure_logging("INFO" if args.verbose else "WARNING", settings.log_format)
     engine = build_engine(settings)
 
     if args.resume:

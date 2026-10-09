@@ -81,7 +81,7 @@ export function App() {
     stopAudio();
     setMessages([]);
     setTurn(null);
-    void run(() => startSession(speakReplies));
+    void run(() => startSession(speakReplies, navigator.language));
   };
 
   const submitText = (event: FormEvent) => {
@@ -217,7 +217,7 @@ export function App() {
               onChange={(e) => setDraft(e.target.value)}
               placeholder={turn ? "…or type your answer" : "Start a conversation first"}
               disabled={!turn || busy}
-              maxLength={2000}
+              maxLength={health?.max_input_chars}
             />
             <button type="submit" disabled={!turn || busy || !draft.trim()}>
               Send

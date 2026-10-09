@@ -38,7 +38,12 @@ def response(text: str, stop_reason: str = "end_turn") -> SimpleNamespace:
         content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text=text)],
         stop_reason=stop_reason,
         model="test-model",
-        usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=5,
+            cache_read_input_tokens=None,
+            cache_creation_input_tokens=None,
+        ),
         _request_id="req_test",
     )
 
@@ -133,3 +138,22 @@ def test_response_without_text_is_treated_as_invalid_output() -> None:
 
     assert generate(llm) == Answer(value=1)
     assert messages.calls[1]["messages"][1] == {"role": "assistant", "content": "(empty)"}
+
+
+def test_cache_marker_goes_on_the_message_before_the_last() -> None:
+    llm, messages = make_llm(response('{"value": 1}'))
+    history = [
+        ChatMessage("user", "opener"),
+        ChatMessage("assistant", "question"),
+        ChatMessage("user", "<interview_state>...</interview_state> answer"),
+    ]
+
+    llm.generate(system="sys", messages=history, output_type=Answer)
+
+    sent = messages.calls[0]["messages"]
+    assert sent[0] == {"role": "user", "content": "opener"}
+    assert sent[1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "question", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert sent[2]["content"] == "<interview_state>...</interview_state> answer"

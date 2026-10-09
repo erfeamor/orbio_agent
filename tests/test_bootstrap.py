@@ -13,12 +13,12 @@ from agent.storage.s3_repo import S3ConversationRepository
 
 
 def settings(tmp_path: Path, **overrides: object) -> Settings:
-    return Settings(_env_file=None, conversations_dir=tmp_path, **overrides)  # type: ignore[call-arg, arg-type]
+    return Settings(conversations_dir=tmp_path, **overrides)  # type: ignore[arg-type]
 
 
 def test_engine_uses_the_configured_model(tmp_path: Path) -> None:
     engine = build_engine(settings(tmp_path, anthropic_model="claude-sonnet-5-5"))
-    assert engine._llm.model_name == "claude-sonnet-5-5"
+    assert engine.model_name == "claude-sonnet-5-5"
 
 
 def test_speech_is_disabled_without_keys(tmp_path: Path) -> None:
@@ -82,3 +82,14 @@ def test_unknown_storage_is_rejected(tmp_path: Path) -> None:
 )
 def test_s3_prefix_ends_with_a_slash(tmp_path: Path, prefix: str, expected: str) -> None:
     assert settings(tmp_path, s3_prefix=prefix).s3_prefix == expected
+
+
+def test_env_example_documents_every_setting() -> None:
+    example = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
+    documented = {line.split("=", 1)[0] for line in example.splitlines() if "=" in line}
+    assert {name.upper() for name in Settings.model_fields} <= documented
+
+
+def test_env_example_values_are_valid_settings() -> None:
+    example = Path(__file__).parents[1] / ".env.example"
+    Settings(_env_file=example)  # type: ignore[call-arg]

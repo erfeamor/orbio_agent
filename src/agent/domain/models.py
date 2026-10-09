@@ -1,12 +1,14 @@
-"""Domain models: the student profile, the LLM's per-turn output and the conversation record."""
+"""Domain models: the student profile and the conversation record."""
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+DEFAULT_LANGUAGE = "en"
 
 
 class Specialization(StrEnum):
@@ -49,21 +51,94 @@ class Phase(StrEnum):
     CONSENT = "consent"
     COLLECTING = "collecting"
     CONFIRMING = "confirming"
-    RECOMMENDING = "recommending"
     DONE = "done"
 
 
+class EndReason(StrEnum):
+    DECLINED = "declined"  # said no to the consent question: no interview took place
+    STOPPED = "stopped"  # asked to end before the recommendations
+    COMPLETED = "completed"  # confirmed the profile and got recommendations
+
+
+class Role(StrEnum):
+    STUDENT = "student"
+    AGENT = "agent"
+
+
+class ProfileField(StrEnum):
+    """Names of the StudentProfile fields, in the order the interview asks for them."""
+
+    SCHOOL_YEAR = "school_year"
+    SPECIALIZATION = "specialization"
+    INTERESTS = "interests"
+    MAGIC_ORIENTATION = "magic_orientation"
+    LEARNING_MODALITY = "learning_modality"
+    WEEKLY_FREE_HOURS = "weekly_free_hours"
+
+
+def _skippable(skippable: bool) -> dict[str, Any]:
+    """Field metadata: may the student decline to answer? Required fields feed hard filters."""
+    return {"skippable": skippable}
+
+
 class StudentProfile(BaseModel):
-    """What the interview collects. Every field is optional until the student provides it."""
+    """What the interview collects. Every field is optional until the student provides it.
+
+    This is the single definition of the profile: the prompt's field list (descriptions and
+    limits) and the required/skippable split are derived from it.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    school_year: int | None = Field(default=None, ge=1, le=7)
-    specialization: Specialization | None = None
-    interests: str | None = Field(default=None, min_length=1, max_length=500)
-    magic_orientation: MagicOrientation | None = None
-    learning_modality: LearningModality | None = None
-    weekly_free_hours: float | None = Field(default=None, ge=0, le=168)
+    school_year: int | None = Field(
+        default=None,
+        ge=1,
+        le=7,
+        description="the student's year at the academy",
+        json_schema_extra=_skippable(False),
+    )
+    specialization: Specialization | None = Field(
+        default=None,
+        description="their branch of magic",
+        json_schema_extra=_skippable(False),
+    )
+    interests: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description="what they enjoy or want to explore",
+        json_schema_extra=_skippable(True),
+    )
+    magic_orientation: MagicOrientation | None = Field(
+        default=None,
+        description="what drives their magic",
+        json_schema_extra=_skippable(True),
+    )
+    learning_modality: LearningModality | None = Field(
+        default=None,
+        description="how they learn best",
+        json_schema_extra=_skippable(True),
+    )
+    weekly_free_hours: float | None = Field(
+        default=None,
+        ge=0,
+        le=168,
+        description="hours per week they could spend on clubs or classes",
+        json_schema_extra=_skippable(False),
+    )
+
+    @classmethod
+    def skippable_fields(cls) -> tuple[ProfileField, ...]:
+        return tuple(ProfileField(name) for name in cls.model_fields if cls._is_skippable(name))
+
+    @classmethod
+    def required_fields(cls) -> tuple[ProfileField, ...]:
+        return tuple(ProfileField(name) for name in cls.model_fields if not cls._is_skippable(name))
+
+    @classmethod
+    def _is_skippable(cls, name: str) -> bool:
+        extra = cls.model_fields[name].json_schema_extra
+        return isinstance(extra, dict) and extra.get("skippable") is True
 
     @field_validator("specialization", "magic_orientation", "learning_modality", mode="before")
     @classmethod
@@ -75,8 +150,10 @@ class StudentProfile(BaseModel):
     def _strip_text(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
 
-    def missing_fields(self) -> list[str]:
-        return [name for name in type(self).model_fields if getattr(self, name) is None]
+    def missing_fields(self) -> list[ProfileField]:
+        return [
+            ProfileField(name) for name in type(self).model_fields if getattr(self, name) is None
+        ]
 
     def is_complete(self) -> bool:
         return not self.missing_fields()
@@ -104,57 +181,13 @@ class StudentProfile(BaseModel):
         return type(self).model_validate(accepted), errors
 
 
-class ExtractedFields(BaseModel):
-    """Values the LLM extracted from the latest message.
-
-    Deliberately looser than StudentProfile: the LLM reports what the student said
-    (e.g. specialization "necromancy") and StudentProfile.apply decides whether it is valid,
-    so invalid answers can be reported back to the student instead of being coerced.
-    """
-
-    school_year: int | None = None
-    specialization: str | None = None
-    interests: str | None = None
-    magic_orientation: str | None = None
-    learning_modality: str | None = None
-    weekly_free_hours: float | None = None
-
-
-class TurnOutput(BaseModel):
-    """Structured output the LLM returns for every interview turn."""
-
-    extracted: ExtractedFields
-    reply: str
-    intent: Intent
-    refused_fields: list[str] = Field(
-        default_factory=list, description="Fields the student declined to answer this turn"
-    )
-    sentiment: Sentiment
-    language: str = Field(description="ISO 639-1 code of the student's language, e.g. 'en'")
-
-
 class Recommendation(BaseModel):
     name: str
     reason: str
 
 
-class ReplyOutput(BaseModel):
-    """Structured output for calls that only produce a message to the student."""
-
-    reply: str
-
-
-class RecommendationOutput(BaseModel):
-    recommendations: list[Recommendation]
-    reply: str
-
-
-class SummaryOutput(BaseModel):
-    key_points: list[str]
-
-
 class Message(BaseModel):
-    role: Literal["student", "agent"]
+    role: Role
     text: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -167,16 +200,17 @@ class ConversationRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     phase: Phase = Phase.CONSENT
-    language: str = "en"
+    end_reason: EndReason | None = Field(default=None, description="Set when phase is done")
+    language: str = DEFAULT_LANGUAGE
     transcript: list[Message] = Field(default_factory=list)
     profile: StudentProfile = Field(default_factory=StudentProfile)
     field_errors: dict[str, str] = Field(default_factory=dict)
-    skipped_fields: list[str] = Field(default_factory=list)
+    skipped_fields: list[ProfileField] = Field(default_factory=list)
     sentiment_history: list[Sentiment] = Field(default_factory=list)
     recommendations: list[Recommendation] = Field(default_factory=list)
     summary: list[str] | None = Field(default=None, description="Key points for school staff")
     model: str | None = None
     prompt_version: str | None = None
 
-    def add_message(self, role: Literal["student", "agent"], text: str) -> None:
+    def add_message(self, role: Role, text: str) -> None:
         self.transcript.append(Message(role=role, text=text))

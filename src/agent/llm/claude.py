@@ -30,6 +30,8 @@ _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 _MAX_TOKENS = 16000
 # One retry when the output fails Pydantic validation (e.g. truncated JSON).
 _OUTPUT_ATTEMPTS = 2
+# Start of the SDK's TypeError when no API key, token or profile can be found.
+_MISSING_CREDENTIALS = "Could not resolve authentication method"
 
 
 class ClaudeLLM(LLMClient):
@@ -56,9 +58,7 @@ class ClaudeLLM(LLMClient):
 
     def generate(self, *, system: str, messages: Sequence[ChatMessage], output_type: type[T]) -> T:
         schema = transform_schema(output_type)
-        conversation: list[MessageParam] = [
-            {"role": m.role, "content": m.content} for m in messages
-        ]
+        conversation = _with_cache_breakpoint(messages)
         last_error = ""
         for attempt in range(1, _OUTPUT_ATTEMPTS + 1):
             text = self._call(system, conversation, schema, output_type.__name__)
@@ -103,7 +103,7 @@ class ClaudeLLM(LLMClient):
             )
         except TypeError as exc:
             # Raised by the SDK before sending when no API key or profile is configured.
-            if "authentication" not in str(exc):
+            if _MISSING_CREDENTIALS not in str(exc):
                 raise
             raise LLMConfigurationError("no Anthropic credentials configured") from exc
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
@@ -117,16 +117,47 @@ class ClaudeLLM(LLMClient):
         except anthropic.APIConnectionError as exc:  # includes APITimeoutError
             raise LLMUnavailableError(f"cannot reach Anthropic API: {exc}") from exc
 
+        usage = response.usage
         logger.info(
-            "llm call %s model=%s stop=%s in=%d out=%d latency_ms=%d request_id=%s",
+            "llm call %s model=%s stop=%s in=%d cache_read=%d cache_write=%d out=%d "
+            "latency_ms=%d request_id=%s",
             label,
             response.model,
             response.stop_reason,
-            response.usage.input_tokens,
-            response.usage.output_tokens,
+            usage.input_tokens,
+            usage.cache_read_input_tokens or 0,
+            usage.cache_creation_input_tokens or 0,
+            usage.output_tokens,
             (time.monotonic() - started) * 1000,
             response._request_id,
         )
         if response.stop_reason == "refusal":
             raise LLMRefusalError("the model declined to answer")
         return next((block.text for block in response.content if block.type == "text"), "")
+
+
+def _with_cache_breakpoint(messages: Sequence[ChatMessage]) -> list[MessageParam]:
+    """Convert to API messages, marking the end of the part that repeats on the next call.
+
+    Per the LLMClient contract only the final message varies between calls, so the cache
+    marker goes on the message before it: the next turn reads the system prompt and the
+    whole earlier history from cache. Prefixes below the model's minimum simply don't cache.
+    """
+    converted: list[MessageParam] = []
+    for index, message in enumerate(messages):
+        if index == len(messages) - 2:
+            converted.append(
+                {
+                    "role": message.role,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": message.content,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            )
+        else:
+            converted.append({"role": message.role, "content": message.content})
+    return converted

@@ -5,20 +5,18 @@ from typing import Any
 
 import httpx
 import pytest
+from factories import EN, make_engine
 
-from agent.domain.catalog import load_catalog
-from agent.domain.models import ExtractedFields, Intent, Sentiment, TurnOutput
-from agent.engine import prompts
+from agent.domain.models import Intent, Sentiment
 from agent.engine.engine import ConversationNotFoundError, Engine
+from agent.engine.schemas import ExtractedFields, TurnOutput
 from agent.llm.fake import FakeLLM
 from agent.speech.base import SpeechError, STTClient, Transcript, TTSClient
 from agent.speech.deepgram import DeepgramSTT
 from agent.speech.elevenlabs import ElevenLabsSTT, ElevenLabsTTS
 from agent.speech.fake import FakeSTT, FakeTTS
-from agent.speech.pipeline import HEARING_FAILURE_MESSAGE, VoicePipeline
+from agent.speech.pipeline import VoicePipeline
 from agent.storage.file_repo import JsonFileRepository
-
-CATALOG = load_catalog(Path(__file__).parents[1] / "data" / "catalog.json")
 
 
 def mock_client(handler: Any) -> httpx.Client:
@@ -230,7 +228,7 @@ def test_scribe_network_error() -> None:
 @pytest.fixture
 def engine_and_llm(tmp_path: Path) -> tuple[Engine, FakeLLM]:
     llm = FakeLLM()
-    return Engine(llm, JsonFileRepository(tmp_path), CATALOG), llm
+    return make_engine(llm, JsonFileRepository(tmp_path)), llm
 
 
 def confirm_turn() -> TurnOutput:
@@ -270,7 +268,7 @@ def test_unclear_audio_asks_again_without_a_turn(
         start.id, b"clip", "audio/webm"
     )
 
-    assert turn.reply == prompts.EMPTY_INPUT_MESSAGE
+    assert turn.reply == EN.empty_input
     assert turn.record.version == start.version
     assert llm.calls == []
 
@@ -282,7 +280,7 @@ def test_stt_failure_asks_again(engine_and_llm: tuple[Engine, FakeLLM]) -> None:
 
     turn = pipeline(engine, stt, FakeTTS()).handle(conversation_id, b"clip", "audio/webm")
 
-    assert turn.reply == HEARING_FAILURE_MESSAGE
+    assert turn.reply == EN.hearing_failure
     assert turn.transcript is None
 
 

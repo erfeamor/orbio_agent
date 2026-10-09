@@ -72,7 +72,7 @@ def test_filter_keeps_entries_that_meet_all_requirements() -> None:
 def test_filter_rejects_with_reason(overrides: dict[str, object], reason: str) -> None:
     result = filter_catalog([make_entry(**overrides)], make_profile())
     assert result.eligible == []
-    assert result.rejected == {"Test Club": [reason]}
+    assert [str(r) for r in result.rejected["Test Club"]] == [reason]
 
 
 def test_filter_collects_every_failed_requirement() -> None:

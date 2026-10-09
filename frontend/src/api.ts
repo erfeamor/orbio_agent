@@ -1,41 +1,15 @@
 // Typed client for the FastAPI service (src/agent/interfaces/api.py).
 
-export type Phase = "consent" | "collecting" | "confirming" | "done";
+import type { components } from "./api.gen";
 
-export interface Profile {
-  school_year: number | null;
-  specialization: string | null;
-  interests: string | null;
-  magic_orientation: string | null;
-  learning_modality: string | null;
-  weekly_free_hours: number | null;
-}
-
-export interface Recommendation {
-  name: string;
-  reason: string;
-}
-
-export interface TurnResponse {
-  conversation_id: string;
-  transcript: string | null;
-  reply: string;
-  audio_base64: string | null;
-  audio_media_type: string | null;
-  phase: Phase;
-  language: string;
-  profile: Profile;
-  field_errors: Record<string, string>;
-  recommendations: Recommendation[];
-  summary: string[] | null;
-}
-
-export interface Health {
-  status: string;
-  speech_to_text: boolean;
-  stt_provider: string | null;
-  text_to_speech: boolean;
-}
+// Types are generated from the API's OpenAPI schema (`make api-types`), never written by hand.
+type Schemas = components["schemas"];
+export type Phase = Schemas["Phase"];
+export type Profile = Schemas["StudentProfile"];
+export type ProfileField = Schemas["ProfileField"];
+export type Recommendation = Schemas["Recommendation"];
+export type TurnResponse = Schemas["TurnResponse"];
+export type Health = Schemas["HealthResponse"];
 
 const API_URL = (import.meta.env.VITE_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
@@ -80,7 +54,9 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 
 export const getHealth = () => request<Health>("/health");
 
-export const startSession = (speak: boolean) => postJson<TurnResponse>("/sessions", { speak });
+/** `language` (e.g. navigator.language) picks the language of the consent message. */
+export const startSession = (speak: boolean, language?: string) =>
+  postJson<TurnResponse>("/sessions", { speak, language });
 
 export const sendText = (conversationId: string, text: string, speak: boolean) =>
   postJson<TurnResponse>(`/sessions/${conversationId}/messages`, { text, speak });

@@ -5,13 +5,11 @@ import time
 from dataclasses import dataclass
 
 from agent.domain.models import ConversationRecord
-from agent.engine import prompts
 from agent.engine.engine import ConversationNotFoundError, Engine
+from agent.engine.messages import messages_for
 from agent.speech.base import SpeechError, STTClient, TTSClient
 
 logger = logging.getLogger(__name__)
-
-HEARING_FAILURE_MESSAGE = "Sorry, I couldn't hear that properly. Could you try again?"
 
 
 def speak_or_none(tts: TTSClient | None, text: str) -> bytes | None:
@@ -49,14 +47,16 @@ class VoicePipeline:
 
     def handle(self, conversation_id: str, audio: bytes, content_type: str) -> VoiceTurn:
         # Fail before paying for a transcription if the conversation doesn't exist.
-        if self._engine.get(conversation_id) is None:
+        record = self._engine.get(conversation_id)
+        if record is None:
             raise ConversationNotFoundError(conversation_id)
+        messages = messages_for(record.language)
         started = time.monotonic()
         try:
             transcript = self._stt.transcribe(audio, content_type)
         except SpeechError:
             logger.exception("transcription failed for conversation %s", conversation_id)
-            return self._without_turn(conversation_id, None, HEARING_FAILURE_MESSAGE)
+            return self._without_turn(record, None, messages.hearing_failure)
         stt_ms = (time.monotonic() - started) * 1000
 
         if not transcript.text or transcript.confidence < self._min_confidence:
@@ -65,9 +65,7 @@ class VoicePipeline:
                 transcript.confidence,
                 len(transcript.text),
             )
-            return self._without_turn(
-                conversation_id, transcript.text or None, prompts.EMPTY_INPUT_MESSAGE
-            )
+            return self._without_turn(record, transcript.text or None, messages.empty_input)
 
         result = self._engine.handle_turn(conversation_id, transcript.text)
         engine_ms = (time.monotonic() - started) * 1000 - stt_ms
@@ -80,9 +78,8 @@ class VoicePipeline:
         )
         return VoiceTurn(transcript.text, result.reply, speech, result.record)
 
-    def _without_turn(self, conversation_id: str, transcript: str | None, reply: str) -> VoiceTurn:
+    def _without_turn(
+        self, record: ConversationRecord, transcript: str | None, reply: str
+    ) -> VoiceTurn:
         """Reply without running the engine; the stored conversation is unchanged."""
-        record = self._engine.get(conversation_id)
-        if record is None:
-            raise ConversationNotFoundError(conversation_id)
         return VoiceTurn(transcript, reply, speak_or_none(self._tts, reply), record)

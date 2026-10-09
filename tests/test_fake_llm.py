@@ -1,6 +1,6 @@
 import pytest
 
-from agent.domain.models import ReplyOutput, SummaryOutput
+from agent.engine.schemas import ReplyOutput, SummaryOutput
 from agent.llm.base import ChatMessage
 from agent.llm.fake import FakeLLM
 

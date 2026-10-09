@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     speech_timeout_seconds: float = 15.0
     stt_min_confidence: float = 0.4
 
+    # Interview
+    max_input_chars: int = 2000
+    max_recommendations: int = 3
+    frustration_streak: int = 2
+
+    # Logging (the CLI logs warnings only, unless run with -v)
+    log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+
     # HTTP API
     cors_origins: list[str] = ["http://localhost:5173"]
     max_audio_bytes: int = 5_000_000

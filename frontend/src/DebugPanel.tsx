@@ -1,6 +1,6 @@
-import type { Health, Profile, TurnResponse } from "./api";
+import type { Health, Phase, ProfileField, TurnResponse } from "./api";
 
-const FIELDS: { key: keyof Profile; label: string }[] = [
+const FIELDS: { key: ProfileField; label: string }[] = [
   { key: "school_year", label: "School year" },
   { key: "specialization", label: "Specialization" },
   { key: "interests", label: "Interests" },
@@ -9,7 +9,7 @@ const FIELDS: { key: keyof Profile; label: string }[] = [
   { key: "weekly_free_hours", label: "Free hours / week" },
 ];
 
-const PHASES = ["consent", "collecting", "confirming", "done"] as const;
+const PHASES: Phase[] = ["consent", "collecting", "confirming", "done"];
 
 /** Live view of what the engine has understood so far. */
 export function DebugPanel({ turn, health }: { turn: TurnResponse | null; health: Health | null }) {
@@ -40,6 +40,12 @@ export function DebugPanel({ turn, health }: { turn: TurnResponse | null; health
               </tr>
             );
           })}
+          {turn?.end_reason && (
+            <tr>
+              <th scope="row">Ended</th>
+              <td>{turn.end_reason}</td>
+            </tr>
+          )}
           <tr>
             <th scope="row">Language</th>
             <td>{turn?.language ?? <span className="muted">—</span>}</td>

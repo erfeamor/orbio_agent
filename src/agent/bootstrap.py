@@ -6,7 +6,9 @@ from pydantic import SecretStr
 
 from agent.config import Settings
 from agent.domain.catalog import load_catalog
-from agent.engine.engine import Engine
+from agent.engine.engine import Engine, EngineConfig
+from agent.engine.recommender import Recommender
+from agent.engine.summarizer import Summarizer
 from agent.llm.base import LLMClient
 from agent.llm.claude import ClaudeLLM
 from agent.speech.base import STTClient, TTSClient
@@ -66,8 +68,17 @@ def _build_s3_repository(settings: Settings) -> ConversationRepository:
 
 
 def build_engine(settings: Settings) -> Engine:
+    llm = build_llm(settings)
+    catalog = load_catalog(settings.catalog_path)
     return Engine(
-        build_llm(settings), build_repository(settings), load_catalog(settings.catalog_path)
+        llm,
+        build_repository(settings),
+        Recommender(llm, catalog, limit=settings.max_recommendations),
+        Summarizer(llm),
+        EngineConfig(
+            max_input_chars=settings.max_input_chars,
+            frustration_streak=settings.frustration_streak,
+        ),
     )
 
 

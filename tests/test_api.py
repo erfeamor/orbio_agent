@@ -2,13 +2,12 @@ import base64
 from pathlib import Path
 
 import pytest
+from factories import EN, make_engine, turn
 from fastapi.testclient import TestClient
 
 from agent.config import Settings
-from agent.domain.catalog import load_catalog
-from agent.domain.models import ExtractedFields, Intent, Sentiment, TurnOutput
-from agent.engine import prompts
-from agent.engine.engine import Engine
+from agent.domain.models import Intent
+from agent.engine.messages import MESSAGES
 from agent.interfaces.api import Components, create_app
 from agent.llm.base import LLMConfigurationError
 from agent.llm.fake import FakeLLM
@@ -17,18 +16,7 @@ from agent.speech.fake import FakeSTT, FakeTTS
 from agent.storage.base import StorageUnavailableError, VersionConflictError
 from agent.storage.file_repo import JsonFileRepository
 
-CATALOG = load_catalog(Path(__file__).parents[1] / "data" / "catalog.json")
 UNKNOWN_ID = "0" * 32
-
-
-def turn(intent: Intent = Intent.ANSWER, **extracted: object) -> TurnOutput:
-    return TurnOutput(
-        extracted=ExtractedFields(**extracted),  # type: ignore[arg-type]
-        reply=f"reply ({intent.value})",
-        intent=intent,
-        sentiment=Sentiment.NEUTRAL,
-        language="en",
-    )
 
 
 class Harness:
@@ -36,8 +24,8 @@ class Harness:
         self.llm = FakeLLM()
         self.stt = FakeSTT() if stt else None
         self.tts = FakeTTS() if tts else None
-        self.engine = Engine(self.llm, JsonFileRepository(tmp_path), CATALOG)
-        settings = Settings(_env_file=None, max_audio_bytes=100)  # type: ignore[call-arg]
+        self.engine = make_engine(self.llm, JsonFileRepository(tmp_path))
+        settings = Settings(max_audio_bytes=100)
         app = create_app(Components(self.engine, self.stt, self.tts), settings)
         self.client = TestClient(app)
 
@@ -65,6 +53,7 @@ def test_health_reports_speech_availability(tmp_path: Path) -> None:
         "speech_to_text": False,
         "stt_provider": None,
         "text_to_speech": True,
+        "max_input_chars": 2000,
     }
 
 
@@ -77,17 +66,18 @@ def test_start_returns_the_consent_message(h: Harness) -> None:
 
     body = response.json()
     assert response.status_code == 201
-    assert body["reply"] == prompts.CONSENT_MESSAGE
+    assert body["reply"] == EN.consent
     assert body["phase"] == "consent"
-    assert base64.b64decode(body["audio_base64"]) == f"audio:{prompts.CONSENT_MESSAGE}".encode()
+    assert body["end_reason"] is None
+    assert base64.b64decode(body["audio_base64"]) == f"audio:{EN.consent}".encode()
     assert body["audio_media_type"] == "audio/mpeg"
 
 
 def test_text_message_runs_a_turn(h: Harness) -> None:
     conversation_id = h.start()
-    h.llm.queue(turn(Intent.CONFIRM))
+    h.llm.queue(turn(Intent.CONFIRM, reply="reply (confirm)"))
     h.client.post(f"/sessions/{conversation_id}/messages", json={"text": "yes"})
-    h.llm.queue(turn(school_year=3))
+    h.llm.queue(turn(reply="reply (answer)", school_year=3))
 
     response = h.client.post(f"/sessions/{conversation_id}/messages", json={"text": "year 3"})
 
@@ -103,7 +93,7 @@ def test_audio_message_returns_transcript_reply_and_audio(h: Harness) -> None:
     conversation_id = h.start()
     assert h.stt is not None
     h.stt.queue(Transcript("yes please", 0.9, "en"))
-    h.llm.queue(turn(Intent.CONFIRM))
+    h.llm.queue(turn(Intent.CONFIRM, reply="reply (confirm)"))
 
     response = h.client.post(f"/sessions/{conversation_id}/audio", files=upload())
 
@@ -118,8 +108,9 @@ def test_audio_message_returns_transcript_reply_and_audio(h: Harness) -> None:
 def test_get_session_returns_the_full_record(h: Harness) -> None:
     conversation_id = h.start()
     body = h.client.get(f"/sessions/{conversation_id}").json()
-    assert body["id"] == conversation_id
-    assert body["transcript"][0]["text"] == prompts.CONSENT_MESSAGE
+    assert body["conversation_id"] == conversation_id
+    assert "version" not in body and "prompt_version" not in body
+    assert body["transcript"][0]["text"] == EN.consent
 
 
 @pytest.mark.parametrize(
@@ -218,3 +209,9 @@ def test_storage_failure_is_503_without_details(
 
     assert response.status_code == 503
     assert "AccessDenied" not in response.text
+
+
+def test_start_accepts_a_preferred_language(h: Harness) -> None:
+    body = h.client.post("/sessions", json={"language": "es-ES"}).json()
+    assert body["language"] == "es"
+    assert body["reply"] == MESSAGES["es"].consent

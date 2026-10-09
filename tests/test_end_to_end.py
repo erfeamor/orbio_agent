@@ -4,22 +4,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent.domain.catalog import load_catalog
-from agent.domain.models import (
+from factories import make_engine, sent_state
+
+from agent.domain.models import Intent, Recommendation, Sentiment
+from agent.engine import prompts
+from agent.engine.schemas import (
     ExtractedFields,
-    Intent,
-    Recommendation,
     RecommendationOutput,
     ReplyOutput,
-    Sentiment,
     SummaryOutput,
     TurnOutput,
 )
-from agent.engine.engine import Engine
 from agent.llm.fake import FakeLLM
 from agent.storage.file_repo import JsonFileRepository
-
-CATALOG = load_catalog(Path(__file__).parents[1] / "data" / "catalog.json")
 
 
 def turn(
@@ -40,7 +37,7 @@ def turn(
 
 def test_spanish_conversation_with_errors_skip_and_correction(tmp_path: Path) -> None:
     llm = FakeLLM()
-    engine = Engine(llm, JsonFileRepository(tmp_path), CATALOG)
+    engine = make_engine(llm, JsonFileRepository(tmp_path))
     conversation_id = engine.start().record.id
 
     script: list[tuple[str, list[Any]]] = [
@@ -96,7 +93,7 @@ def test_spanish_conversation_with_errors_skip_and_correction(tmp_path: Path) ->
     assert stored["language"] == "es"
     assert stored["version"] == len(script) + 1
     assert stored["model"] == "fake"
-    assert stored["prompt_version"] == "v2"
+    assert stored["prompt_version"] == prompts.PROMPT_VERSION
     assert stored["profile"] == {
         "school_year": 3,
         "specialization": "ALCHEMY",
@@ -130,13 +127,13 @@ def test_spanish_conversation_with_errors_skip_and_correction(tmp_path: Path) ->
 
     # The rejected year 9 was reported back in the next prompt, and frustration
     # switched the prompt to its short mode after two frustrated messages.
-    assert "school_year:" in llm.calls[2].system
-    assert "seems frustrated" in llm.calls[5].system
+    assert "school_year:" in sent_state(llm.calls[2])
+    assert "seems frustrated" in sent_state(llm.calls[5])
 
 
 def test_frustrated_student_stops_early(tmp_path: Path) -> None:
     llm = FakeLLM()
-    engine = Engine(llm, JsonFileRepository(tmp_path), CATALOG)
+    engine = make_engine(llm, JsonFileRepository(tmp_path))
     conversation_id = engine.start().record.id
 
     llm.queue(turn(Intent.CONFIRM))
@@ -158,4 +155,4 @@ def test_frustrated_student_stops_early(tmp_path: Path) -> None:
     assert stored["summary"] == ["Year 5.", "Left early, frustrated."]
     assert "frustrated, frustrated" in llm.calls[-1].messages[0].content
     # The third message already ran with the short, frustration-aware prompt.
-    assert "seems frustrated" in llm.calls[3].system
+    assert "seems frustrated" in sent_state(llm.calls[3])

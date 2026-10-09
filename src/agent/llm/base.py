@@ -49,5 +49,7 @@ class LLMClient(ABC):
     def generate(self, *, system: str, messages: Sequence[ChatMessage], output_type: type[T]) -> T:
         """Return the model's answer validated as ``output_type``.
 
+        Callers put anything that changes per call in the final message; everything before it
+        is expected to repeat on the next call, so implementations may cache that prefix.
         Raises an ``LLMError`` subclass on failure.
         """

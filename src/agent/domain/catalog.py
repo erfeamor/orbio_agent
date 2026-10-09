@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from agent.domain.models import (
     LearningModality,
     MagicOrientation,
-    Recommendation,
     Specialization,
     StudentProfile,
 )
@@ -39,10 +38,34 @@ class CatalogEntry(BaseModel):
     ideal_profile: IdealProfile
 
 
+class RejectionReason(StrEnum):
+    SCHOOL_YEAR_TOO_LOW = "school_year_too_low"
+    NOT_ENOUGH_FREE_HOURS = "not_enough_free_hours"
+    SPECIALIZATION_EXCLUDED = "specialization_excluded"
+
+
+@dataclass(frozen=True)
+class Rejection:
+    """Why an entry is closed to the student; ``required`` is the value the entry needs."""
+
+    reason: RejectionReason
+    required: int | float | str
+
+    def __str__(self) -> str:
+        # English wording for the LLM prompt; the LLM explains it in the student's language.
+        match self.reason:
+            case RejectionReason.SCHOOL_YEAR_TOO_LOW:
+                return f"requires school year {self.required} or above"
+            case RejectionReason.NOT_ENOUGH_FREE_HOURS:
+                return f"requires {self.required:g} free hours per week"
+            case RejectionReason.SPECIALIZATION_EXCLUDED:
+                return f"not open to {self.required} students"
+
+
 @dataclass
 class FilterResult:
     eligible: list[CatalogEntry] = field(default_factory=list)
-    rejected: dict[str, list[str]] = field(default_factory=dict)
+    rejected: dict[str, list[Rejection]] = field(default_factory=dict)
 
 
 _catalog_adapter = TypeAdapter(list[CatalogEntry])
@@ -70,13 +93,17 @@ def filter_catalog(entries: list[CatalogEntry], profile: StudentProfile) -> Filt
 
     result = FilterResult()
     for entry in entries:
-        reasons: list[str] = []
+        reasons: list[Rejection] = []
         if profile.school_year < entry.min_school_year:
-            reasons.append(f"requires school year {entry.min_school_year} or above")
+            reasons.append(Rejection(RejectionReason.SCHOOL_YEAR_TOO_LOW, entry.min_school_year))
         if profile.weekly_free_hours < entry.min_free_hours_required:
-            reasons.append(f"requires {entry.min_free_hours_required:g} free hours per week")
+            reasons.append(
+                Rejection(RejectionReason.NOT_ENOUGH_FREE_HOURS, entry.min_free_hours_required)
+            )
         if profile.specialization in entry.excluded_specializations:
-            reasons.append(f"not open to {profile.specialization.value} students")
+            reasons.append(
+                Rejection(RejectionReason.SPECIALIZATION_EXCLUDED, profile.specialization.value)
+            )
 
         if reasons:
             result.rejected[entry.name] = reasons
@@ -85,24 +112,30 @@ def filter_catalog(entries: list[CatalogEntry], profile: StudentProfile) -> Filt
     return result
 
 
+@dataclass(frozen=True)
+class RankedEntry:
+    entry: CatalogEntry
+    matches_orientation: bool
+    matches_modality: bool
+
+    @property
+    def score(self) -> int:
+        return int(self.matches_orientation) + int(self.matches_modality)
+
+
 def rank_by_ideal_profile(
     entries: list[CatalogEntry], profile: StudentProfile, limit: int
-) -> list[Recommendation]:
-    """Deterministic ranking by ideal-profile matches; the fallback when the LLM is unavailable."""
+) -> list[RankedEntry]:
+    """Deterministic ranking by ideal-profile matches; the fallback when the LLM is unavailable.
 
-    def matches(entry: CatalogEntry) -> list[str]:
-        found = []
-        if entry.ideal_profile.magic_orientation is profile.magic_orientation:
-            found.append(f"suits your {entry.ideal_profile.magic_orientation.value.lower()} drive")
-        if entry.ideal_profile.learning_modality is profile.learning_modality:
-            found.append(f"fits your {entry.ideal_profile.learning_modality.value.lower()} style")
-        return found
-
-    ranked = sorted(entries, key=lambda e: len(matches(e)), reverse=True)[:limit]
-    return [
-        Recommendation(
-            name=entry.name,
-            reason=" and ".join(matches(entry)).capitalize() or "Open to you",
+    Returns what matched rather than sentences, so callers can word the reason in any language.
+    """
+    ranked = [
+        RankedEntry(
+            entry=entry,
+            matches_orientation=entry.ideal_profile.magic_orientation is profile.magic_orientation,
+            matches_modality=entry.ideal_profile.learning_modality is profile.learning_modality,
         )
-        for entry in ranked
+        for entry in entries
     ]
+    return sorted(ranked, key=lambda r: r.score, reverse=True)[:limit]
