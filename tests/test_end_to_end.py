@@ -132,3 +132,30 @@ def test_spanish_conversation_with_errors_skip_and_correction(tmp_path: Path) ->
     # switched the prompt to its short mode after two frustrated messages.
     assert "school_year:" in llm.calls[2].system
     assert "seems frustrated" in llm.calls[5].system
+
+
+def test_frustrated_student_stops_early(tmp_path: Path) -> None:
+    llm = FakeLLM()
+    engine = Engine(llm, JsonFileRepository(tmp_path), CATALOG)
+    conversation_id = engine.start().record.id
+
+    llm.queue(turn(Intent.CONFIRM))
+    engine.handle_turn(conversation_id, "ok")
+    llm.queue(turn(sentiment=Sentiment.FRUSTRATED, school_year=5))
+    engine.handle_turn(conversation_id, "5. how long is this?")
+    llm.queue(turn(Intent.OFF_TOPIC, Sentiment.FRUSTRATED))
+    engine.handle_turn(conversation_id, "this is boring")
+    llm.queue(
+        turn(Intent.STOP, Sentiment.FRUSTRATED),
+        SummaryOutput(key_points=["Year 5.", "Left early, frustrated."]),
+    )
+    engine.handle_turn(conversation_id, "I'm done")
+
+    stored = json.loads((tmp_path / f"{conversation_id}.json").read_text(encoding="utf-8"))
+    assert stored["phase"] == "done"
+    assert stored["profile"]["school_year"] == 5
+    assert stored["recommendations"] == []
+    assert stored["summary"] == ["Year 5.", "Left early, frustrated."]
+    assert "frustrated, frustrated" in llm.calls[-1].messages[0].content
+    # The third message already ran with the short, frustration-aware prompt.
+    assert "seems frustrated" in llm.calls[3].system

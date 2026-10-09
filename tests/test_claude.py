@@ -37,7 +37,7 @@ def response(text: str, stop_reason: str = "end_turn") -> SimpleNamespace:
     return SimpleNamespace(
         content=[SimpleNamespace(type="thinking"), SimpleNamespace(type="text", text=text)],
         stop_reason=stop_reason,
-        model="claude-opus-5-5",
+        model="test-model",
         usage=SimpleNamespace(input_tokens=10, output_tokens=5),
         _request_id="req_test",
     )
@@ -46,7 +46,7 @@ def response(text: str, stop_reason: str = "end_turn") -> SimpleNamespace:
 def make_llm(*outcomes: Any) -> tuple[ClaudeLLM, FakeMessages]:
     messages = FakeMessages(list(outcomes))
     client = SimpleNamespace(messages=messages)
-    return ClaudeLLM(client=client), messages  # type: ignore[arg-type]
+    return ClaudeLLM("test-model", client=client), messages  # type: ignore[arg-type]
 
 
 def generate(llm: ClaudeLLM) -> Answer:
@@ -66,7 +66,7 @@ def test_returns_validated_output_and_sends_structured_output_config() -> None:
     assert generate(llm) == Answer(value=3)
 
     call = messages.calls[0]
-    assert call["model"] == "claude-opus-5-5"
+    assert call["model"] == "test-model"
     assert call["output_config"]["effort"] == "low"
     assert call["output_config"]["format"]["type"] == "json_schema"
     assert call["extra_body"] == {"fallbacks": "default"}
@@ -112,3 +112,18 @@ def test_sdk_errors_are_mapped(error: Exception, expected: type[Exception]) -> N
     llm, _ = make_llm(error)
     with pytest.raises(expected):
         generate(llm)
+
+
+def test_unrelated_type_errors_are_not_hidden() -> None:
+    llm, _ = make_llm(TypeError("something else"))
+    with pytest.raises(TypeError, match="something else"):
+        generate(llm)
+
+
+def test_response_without_text_is_treated_as_invalid_output() -> None:
+    empty = response("")
+    empty.content = []
+    llm, messages = make_llm(empty, response('{"value": 1}'))
+
+    assert generate(llm) == Answer(value=1)
+    assert messages.calls[1]["messages"][1] == {"role": "assistant", "content": "(empty)"}

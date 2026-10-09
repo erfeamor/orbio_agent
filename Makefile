@@ -12,7 +12,7 @@ install: $(BIN)/python
 	$(BIN)/pip install -q -e ".[dev]"
 
 test:
-	$(BIN)/pytest --cov=agent --cov-report=term-missing
+	$(BIN)/pytest --cov=agent --cov-report=term-missing --cov-fail-under=90
 
 lint:
 	$(BIN)/ruff check src tests

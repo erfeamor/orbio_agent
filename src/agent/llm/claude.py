@@ -35,7 +35,7 @@ _OUTPUT_ATTEMPTS = 2
 class ClaudeLLM(LLMClient):
     def __init__(
         self,
-        model: str = "claude-opus-5-5",
+        model: str,
         *,
         effort: Effort = "low",
         timeout: float = 20.0,

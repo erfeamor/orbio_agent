@@ -88,7 +88,7 @@ When the conversation ends, one LLM call writes 3–6 key points in English for 
 
 ### Claude adapter (`llm/claude.py`)
 
-- Model `claude-opus-5-5` at `effort: "low"` (chat, latency matters), configurable through environment variables.
+- Model and effort come from `ANTHROPIC_MODEL` and `LLM_EFFORT` (defaults in `config.py`: `claude-opus-5-5`, `low`, since this is chat and latency matters). The adapter has no default of its own, so `config.py` is the single source. Each record stores the model that produced it.
 - `messages.create` with `output_config.format` (JSON schema from the SDK's `transform_schema`), validated with Pydantic in the adapter. If validation fails (e.g. truncated output), one retry with the error attached.
 - 20 s timeout and the SDK's built-in retries (`max_retries=2`) for timeouts, connection errors, 429 and 5xx.
 - SDK errors map to two kinds: configuration errors (bad or missing key, bad request, unknown model) stop the app with a clear message; recoverable errors (unavailable, refusal, invalid output) only fail that turn with a fixed reply.

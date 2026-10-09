@@ -53,3 +53,19 @@ def test_no_temp_files_are_left_behind(repo: JsonFileRepository, tmp_path: Path)
     files = list((tmp_path / "conversations").iterdir())
     assert len(files) == 1
     assert files[0].suffix == ".json"
+
+
+def test_failed_write_keeps_the_previous_version(
+    repo: JsonFileRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saved = repo.save(ConversationRecord())
+
+    def broken_replace(src: str, dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("agent.storage.file_repo.os.replace", broken_replace)
+    with pytest.raises(OSError, match="disk full"):
+        repo.save(saved)
+
+    assert repo.get(saved.id) == saved
+    assert [p.suffix for p in (tmp_path / "conversations").iterdir()] == [".json"]

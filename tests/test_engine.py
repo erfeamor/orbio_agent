@@ -19,6 +19,7 @@ from agent.engine import prompts
 from agent.engine.engine import ConversationNotFoundError, Engine
 from agent.llm.base import LLMOutputError, LLMRefusalError, LLMUnavailableError
 from agent.llm.fake import FakeLLM
+from agent.storage.base import VersionConflictError
 from agent.storage.file_repo import JsonFileRepository
 
 CATALOG = load_catalog(Path(__file__).parents[1] / "data" / "catalog.json")
@@ -366,3 +367,85 @@ def test_only_iso_language_codes_are_stored(
 
 def test_one_off_prompts_tell_the_model_not_to_greet_again() -> None:
     assert "don't greet" in prompts.TASK_SYSTEM_PROMPT
+
+
+def test_stop_before_consent_ends_without_a_summary(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = engine.start().record.id
+    llm.queue(turn(Intent.STOP, reply="Bye!"))
+
+    record = engine.handle_turn(conversation_id, "stop").record
+
+    assert record.phase is Phase.DONE
+    assert record.summary is None
+    assert len(llm.calls) == 1
+
+
+def test_off_topic_before_consent_keeps_asking(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = engine.start().record.id
+    llm.queue(turn(Intent.OFF_TOPIC, reply="Ha! Shall we begin?"))
+
+    record = engine.handle_turn(conversation_id, "is the food good here?").record
+
+    assert record.phase is Phase.CONSENT
+
+
+def test_correction_after_recommendations_confirms_again(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = reach_confirmation(engine, llm)
+    llm.queue(
+        turn(Intent.CONFIRM),
+        RecommendationOutput(
+            recommendations=[Recommendation(name="Dueling Circle", reason="r")], reply="Done!"
+        ),
+        SummaryOutput(key_points=["s"]),
+    )
+    engine.handle_turn(conversation_id, "yes")
+    llm.queue(turn(Intent.CORRECTION, school_year=6), ReplyOutput(reply="Year 6 now. Right?"))
+
+    record = engine.handle_turn(conversation_id, "wait, I'm in year 6").record
+
+    assert record.phase is Phase.CONFIRMING
+    assert record.profile.school_year == 6
+
+
+def test_confirmation_failure_uses_the_fallback_message(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = start_collecting(engine, llm)
+    llm.queue(turn(**FULL_PROFILE), LLMUnavailableError("down"))
+
+    result = engine.handle_turn(conversation_id, "everything")
+
+    assert result.record.phase is Phase.CONFIRMING
+    assert result.reply == prompts.fallback_confirmation(result.record)
+    assert "school year: 4" in result.reply
+
+
+def test_no_match_failure_uses_the_fallback_message(engine: Engine, llm: FakeLLM) -> None:
+    conversation_id = start_collecting(engine, llm)
+    llm.queue(
+        turn(**{**FULL_PROFILE, "school_year": 1, "weekly_free_hours": 0}),
+        ReplyOutput(reply="Correct?"),
+    )
+    engine.handle_turn(conversation_id, "year 1, no free time")
+    llm.queue(turn(Intent.CONFIRM), LLMOutputError("bad"), SummaryOutput(key_points=["s"]))
+
+    result = engine.handle_turn(conversation_id, "yes")
+
+    assert result.reply == prompts.fallback_recommendations([])
+    assert result.record.phase is Phase.DONE
+
+
+def test_concurrent_turns_on_the_same_conversation_conflict(
+    engine: Engine, llm: FakeLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = engine.start().record
+    llm.queue(turn(Intent.CONFIRM))
+    engine.handle_turn(stale.id, "yes")  # another request moved it to version 2
+
+    # The engine reads the stale copy; save() then checks against the real stored version.
+    repository = engine._repository
+    real_get = repository.get
+    reads = iter([stale])
+    monkeypatch.setattr(repository, "get", lambda cid: next(reads, None) or real_get(cid))
+    llm.queue(turn(Intent.CONFIRM))
+
+    with pytest.raises(VersionConflictError):
+        engine.handle_turn(stale.id, "yes again")
