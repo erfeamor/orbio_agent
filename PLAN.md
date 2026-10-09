@@ -15,6 +15,7 @@ orbio_agent/
 ├── data/catalog.json       # 15 clubs/classes
 ├── src/agent/
 │   ├── config.py           # pydantic-settings, reads env and .env
+│   ├── bootstrap.py        # builds engine, STT and TTS from settings (shared by CLI and API)
 │   ├── domain/
 │   │   ├── models.py       # StudentProfile, ExtractedFields, TurnOutput, ConversationRecord
 │   │   └── catalog.py      # load, hard-filter, deterministic fallback ranking
@@ -23,7 +24,7 @@ orbio_agent/
 │   │   ├── phases.py       # required vs skippable fields, readiness, frustration
 │   │   └── prompts.py      # interview prompt, one-off prompts, fixed fallback messages
 │   ├── llm/      base.py (LLMClient ABC + errors) · claude.py · fake.py
-│   ├── speech/   base.py (STT, TTS ABCs) · deepgram.py · elevenlabs.py · fake.py
+│   ├── speech/   base.py (STT, TTS ABCs) · deepgram.py · elevenlabs.py · fake.py · pipeline.py
 │   ├── storage/  base.py (ConversationRepository ABC) · file_repo.py · s3_repo.py
 │   └── interfaces/
 │       ├── cli.py          # text only (also what the tests drive)
@@ -96,10 +97,43 @@ When the conversation ends, one LLM call writes 3–6 key points in English for 
 - Each call logs latency, token counts and the request id.
 - The API key is read from `.env` by the settings and passed to the client, because the SDK only reads the real environment.
 
-### Speech
+### Speech (`speech/`)
 
-- **Deepgram Nova-3:** language detection or multilingual mode, for the multiple-languages bonus. An empty or low-confidence transcript gets "I didn't catch that."
-- **ElevenLabs Flash v2.5:** if speech fails, show the text and continue.
+- **Deepgram Nova-3** (`deepgram.py`): REST call with `detect_language=true`, for the multiple-languages bonus. The detected tag (`es-ES`) is reduced to the ISO 639-1 code (`es`) the engine uses.
+- **ElevenLabs Flash v2.5** (`elevenlabs.py`): returns MP3; it detects the language from the text, so no language code is sent. The voice is set with `ELEVENLABS_VOICE_ID`.
+- Both use `httpx` with a 15 s timeout and turn every provider failure into a `SpeechError`, so callers handle one error type.
+
+### Voice pipeline (`speech/pipeline.py`)
+
+One voice turn: audio → STT → engine → TTS.
+
+- An unknown conversation is rejected before calling Deepgram, so no transcription is paid for.
+- Unclear audio (empty transcript or confidence below `STT_MIN_CONFIDENCE`, default 0.4) or an STT failure gets a "please repeat" reply without running the engine; the stored conversation doesn't change.
+- If TTS fails, the reply is still returned as text without audio (`speak_or_none`, also used by the text endpoints).
+- Logs the time spent in STT, engine and TTS for each turn.
+
+### Wiring (`bootstrap.py`)
+
+Builds the real engine, STT and TTS clients from the settings, so the CLI and the API share one setup and tests can pass fakes instead. Speech is optional: without Deepgram or ElevenLabs keys, the STT/TTS clients are `None`, text still works and replies have no audio. An empty `KEY=` line in `.env` counts as not set.
+
+### HTTP API (`interfaces/api.py`)
+
+`create_app()` is an app factory (`make serve` runs `uvicorn --factory` on :8000); tests pass fake components to it.
+
+| Endpoint | What it does |
+|---|---|
+| `GET /health` | Status, plus whether STT and TTS are configured |
+| `POST /sessions` | Starts a conversation and returns the consent message; `{"speak": true}` adds audio |
+| `GET /sessions/{id}` | The full saved record |
+| `POST /sessions/{id}/messages` | Text turn: `{"text": "...", "speak": false}` |
+| `POST /sessions/{id}/audio` | Voice turn: `multipart/form-data` upload in a field named `audio` |
+
+- Every turn returns the same response: transcript, reply, base64 audio and its media type, phase, language, profile, field errors, recommendations and summary, so the frontend's debug panel needs no extra request.
+- Ids are checked against the generated format in the path itself.
+- Errors: 404 unknown conversation, 409 two turns at once on the same conversation, 413 clip too large (`MAX_AUDIO_BYTES`), 415 not audio, 400 empty clip, 503 LLM or speech not configured. The 503 never includes provider error details.
+- CORS allows only `CORS_ORIGINS` (default `http://localhost:5173`).
+- Endpoints are synchronous; FastAPI runs them in a thread pool.
+- No authentication: anyone with a conversation id can read it. Ids are random 32-character strings, acceptable for a demo; listed as a README improvement.
 
 ## 3. Local environment
 
@@ -123,9 +157,10 @@ No network: the fake LLM returns queued outputs or errors and records each call'
 - catalog filtering, and the case where nothing passes;
 - dropping recommendations that aren't in the catalog;
 - LLM timeout, malformed output and refusal paths;
-- empty STT transcript and TTS failure;
+- Deepgram and ElevenLabs request/response handling against a mocked HTTP transport;
+- voice pipeline: empty or low-confidence transcript, STT failure, TTS failure, unknown conversation;
 - 2–3 complete scripted conversations;
-- FastAPI tests with `TestClient`, including the audio endpoint with fake STT/TTS;
+- FastAPI tests with `TestClient`: every endpoint, every error status, CORS, with fake STT/TTS;
 - the S3 repository tested with `moto`, which mocks AWS.
 
 ## 4. Voice frontend (React)
@@ -140,19 +175,13 @@ Browser (React)                                  FastAPI (local or AWS)
 - **Recording:** `navigator.mediaDevices.getUserMedia({ audio: true })` and `MediaRecorder` record WebM/Opus, which Deepgram accepts directly, so the backend doesn't convert audio.
 - **Playback:** the ElevenLabs MP3 comes back base64-encoded in the JSON and plays with `new Audio("data:audio/mpeg;base64,...")`. JSON also avoids configuring binary responses in API Gateway and Lambda.
 - **UI (~150 lines):** a hold-to-talk button, the transcript, a text box that calls `/messages` for testing without speaking, and a debug panel showing `phase` and `profile` filling in live.
-- **API changes:** `CORSMiddleware` allowing `http://localhost:5173` locally and the frontend domain on AWS; audio received with `UploadFile`; a Pydantic response model for the reply.
+- **API:** the endpoints in section 2 (HTTP API). On AWS, `CORS_ORIGINS` is set to the frontend's domain.
 - **Secure page required:** browsers only grant microphone access over HTTPS or on `localhost`. Local testing works; `http://192.168.x.x` from another device doesn't.
 - **Latency:** about 1–3 s per turn, because upload, Deepgram, Claude and ElevenLabs run one after another. Fine for a demo; streaming each step is listed as a README improvement.
 
 ## 5. AWS deployment
 
-The API needs three endpoints:
-
-- `POST /sessions`, which returns the consent message;
-- `POST /sessions/{id}/messages` for text;
-- `POST /sessions/{id}/audio` for voice, which runs STT → engine → TTS and returns the reply as text plus audio.
-
-Because the engine stores nothing in memory, any instance can handle any request.
+The same API (section 2) is deployed unchanged. Because the engine stores nothing in memory, any instance can handle any request.
 
 **Recommended setup: AWS Lambda running the container image, behind API Gateway.** It costs almost nothing while idle, there are no servers to manage, and the same Docker image works locally and in Lambda (through the `mangum` adapter).
 

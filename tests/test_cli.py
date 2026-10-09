@@ -89,17 +89,6 @@ def test_resuming_an_unknown_conversation_fails(
     assert "no conversation" in capsys.readouterr().err
 
 
-def test_build_engine_wires_settings_into_the_claude_adapter(tmp_path: Path) -> None:
-    settings = Settings(
-        _env_file=None,  # type: ignore[call-arg]
-        conversations_dir=tmp_path,
-        anthropic_model="claude-sonnet-5-5",
-        anthropic_api_key="",  # type: ignore[arg-type]
-    )
-    engine = cli.build_engine(settings)
-    assert engine._llm.model_name == "claude-sonnet-5-5"
-
-
 def test_settings_read_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")
     monkeypatch.setenv("LLM_EFFORT", "medium")

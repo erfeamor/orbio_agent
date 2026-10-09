@@ -4,30 +4,13 @@ import argparse
 import logging
 import sys
 
+from agent.bootstrap import build_engine
 from agent.config import Settings
-from agent.domain.catalog import load_catalog
 from agent.domain.models import Phase
-from agent.engine.engine import ConversationNotFoundError, Engine
+from agent.engine.engine import ConversationNotFoundError
 from agent.llm.base import LLMConfigurationError
-from agent.llm.claude import ClaudeLLM
-from agent.storage.file_repo import JsonFileRepository
 
 EXIT_WORDS = {"exit", "quit", "/exit", "/quit"}
-
-
-def build_engine(settings: Settings) -> Engine:
-    # An empty ANTHROPIC_API_KEY= line in .env means "not set".
-    api_key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else ""
-    llm = ClaudeLLM(
-        settings.anthropic_model,
-        effort=settings.llm_effort,
-        timeout=settings.llm_timeout_seconds,
-        max_retries=settings.llm_max_retries,
-        api_key=api_key or None,
-    )
-    return Engine(
-        llm, JsonFileRepository(settings.conversations_dir), load_catalog(settings.catalog_path)
-    )
 
 
 def main(argv: list[str] | None = None) -> int:

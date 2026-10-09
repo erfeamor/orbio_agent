@@ -57,6 +57,9 @@ class Engine:
         record.add_message("agent", prompts.CONSENT_MESSAGE)
         return TurnResult(prompts.CONSENT_MESSAGE, self._repository.save(record))
 
+    def get(self, conversation_id: str) -> ConversationRecord | None:
+        return self._repository.get(conversation_id)
+
     def handle_turn(self, conversation_id: str, text: str) -> TurnResult:
         record = self._repository.get(conversation_id)
         if record is None:

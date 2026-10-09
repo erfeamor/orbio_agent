@@ -20,3 +20,16 @@ class Settings(BaseSettings):
     llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
     llm_timeout_seconds: float = 20.0
     llm_max_retries: int = 2
+
+    # Speech is optional: without keys, the text endpoints still work and replies have no audio.
+    deepgram_api_key: SecretStr | None = None
+    deepgram_model: str = "nova-3"
+    elevenlabs_api_key: SecretStr | None = None
+    elevenlabs_voice_id: str = "JBFqnCBsd6RMkjVDRZzb"
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    speech_timeout_seconds: float = 15.0
+    stt_min_confidence: float = 0.4
+
+    # HTTP API
+    cors_origins: list[str] = ["http://localhost:5173"]
+    max_audio_bytes: int = 5_000_000
