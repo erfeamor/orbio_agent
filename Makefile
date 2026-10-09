@@ -2,7 +2,7 @@ PYTHON ?= python3.12
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: install test lint typecheck run-text serve clean
+.PHONY: install test lint typecheck run-text serve frontend frontend-build clean
 
 $(BIN)/python:
 	$(PYTHON) -m venv $(VENV)
@@ -26,6 +26,16 @@ run-text:
 
 serve:
 	$(BIN)/uvicorn agent.interfaces.api:create_app --factory --reload --port 8000
+
+frontend/node_modules: frontend/package.json
+	cd frontend && npm install --no-audit --no-fund
+	touch frontend/node_modules
+
+frontend: frontend/node_modules
+	cd frontend && npm run dev
+
+frontend-build: frontend/node_modules
+	cd frontend && npm run build
 
 clean:
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache .coverage
