@@ -8,21 +8,21 @@ The core is one engine with no saved state between calls. It takes a conversatio
 
 ```
 orbio_agent/
-├── pyproject.toml          # uv; Python 3.12
-├── Makefile                # install, test, lint, run-text, serve, frontend, docker
+├── pyproject.toml          # Python 3.12, plain venv + pip (uv-compatible)
+├── Makefile                # install, test, lint, typecheck, run-text, serve, frontend, docker
 ├── Dockerfile / docker-compose.yml
 ├── .env.example            # ANTHROPIC_API_KEY, DEEPGRAM_API_KEY, ELEVENLABS_API_KEY, STORAGE=file|s3
-├── data/catalog.json       # ~15 clubs/classes
+├── data/catalog.json       # 15 clubs/classes
 ├── src/agent/
-│   ├── config.py           # pydantic-settings, reads env
+│   ├── config.py           # pydantic-settings, reads env and .env
 │   ├── domain/
-│   │   ├── models.py       # StudentProfile, TurnOutput, CatalogEntry, ConversationRecord
-│   │   └── catalog.py      # load + hard-filter (pure Python)
+│   │   ├── models.py       # StudentProfile, ExtractedFields, TurnOutput, ConversationRecord
+│   │   └── catalog.py      # load, hard-filter, deterministic fallback ranking
 │   ├── engine/
-│   │   ├── engine.py       # Engine.handle_turn(record, text) -> (reply, record)
-│   │   ├── phases.py       # CONSENT → COLLECTING → CONFIRMING → RECOMMENDING → DONE
-│   │   └── prompts.py      # system prompt, per-turn context, recommender, summary
-│   ├── llm/      base.py (LLMClient ABC) · claude.py · fake.py
+│   │   ├── engine.py       # Engine.start() / Engine.handle_turn(conversation_id, text)
+│   │   ├── phases.py       # required vs skippable fields, readiness, frustration
+│   │   └── prompts.py      # interview prompt, one-off prompts, fixed fallback messages
+│   ├── llm/      base.py (LLMClient ABC + errors) · claude.py · fake.py
 │   ├── speech/   base.py (STT, TTS ABCs) · deepgram.py · elevenlabs.py · fake.py
 │   ├── storage/  base.py (ConversationRepository ABC) · file_repo.py · s3_repo.py
 │   └── interfaces/
@@ -36,57 +36,65 @@ orbio_agent/
 
 ### Data models (`domain/models.py`)
 
-- **`StudentProfile`**: all fields optional, with enums and ranges enforced by Pydantic (`school_year: int = Field(ge=1, le=7)`, etc.). A helper method lists which fields are still missing.
+- **`StudentProfile`**: all fields optional, with enums and ranges enforced by Pydantic (`school_year` 1–7, `weekly_free_hours` 0–168). Choice fields accept any capitalization. `apply(updates)` validates each new value on its own and returns the merged profile plus an error per rejected field, so one bad value never discards the good ones.
+- **`ExtractedFields`**: the values Claude extracts, deliberately loosely typed (plain strings, not enums). If a student says "necromancy", Claude reports it as said and `apply()` rejects it with a message; with enums in the schema, Claude would be forced to pick a wrong valid option.
 - **`TurnOutput`**: what Claude returns every turn:
-  - `extracted` (partial profile values),
-  - `reply`,
-  - `intent` (`answer | correction | confirm | reject | off_topic | refuse`),
-  - `sentiment` (`neutral | positive | frustrated`),
-  - `language`.
-- **`ConversationRecord`**: the single JSON document per session:
-  - id and phase,
-  - transcript with timestamps,
-  - the profile, and per-field validation errors,
-  - sentiment history and language,
-  - recommendations, summary, model version and prompt version.
+  - `extracted`, `reply`,
+  - `intent` (`answer | correction | confirm | reject | off_topic | refuse | stop`); `stop` lets the student end early,
+  - `refused_fields`: which questions the student declined, so the code doesn't have to guess from question order,
+  - `sentiment` (`neutral | positive | frustrated`), `language`.
+- **`ConversationRecord`**: the single JSON document per session: id, version, phase, transcript with timestamps, profile, per-field errors, skipped fields, sentiment history, language, recommendations, summary, model and prompt version. It doubles as the session state.
 
-  It doubles as the session state, so storing the conversation and resuming it use the same object.
+### Catalog (`domain/catalog.py`)
+
+- Each entry has `excluded_specializations` as a list (none, one or several) and a nested `ideal_profile` (`magic_orientation`, `learning_modality`), matching the spec's grouping.
+- `filter_catalog` checks `min_school_year`, `min_free_hours_required` and `excluded_specializations`, and keeps every reason an entry was rejected, so the bot can explain itself when nothing qualifies.
+- `rank_by_ideal_profile` ranks entries by orientation and learning-style matches without the LLM; it's the fallback when the recommendation call fails.
+
+### Phases (`engine/phases.py`)
+
+`CONSENT → COLLECTING → CONFIRMING → DONE`. Recommending happens inside the turn where the student confirms, so it isn't a separate phase.
+
+- **Required fields** (`school_year`, `specialization`, `weekly_free_hours`) feed the hard filters and can't be skipped; if refused, the bot explains why and offers to end.
+- **Skippable fields** (`interests`, `magic_orientation`, `learning_modality`) only affect ranking.
+- The interview is ready for confirmation when no required or unskipped field is missing and there are no pending errors.
 
 ### Engine loop (`engine.handle_turn`)
 
-1. Add the student's message to the transcript.
-2. Make one Claude call with structured output (`client.messages.parse(..., output_format=TurnOutput)`). The prompt includes:
-   - the current phase,
-   - the fields still missing,
-   - last turn's validation errors,
-   - the full history, which is what gives the bot multi-turn memory.
-3. Validate each extracted field on its own. Valid values go into the profile; invalid ones are kept as errors so the next prompt asks again ("year 9 isn't possible, years run 1–7"). One bad field doesn't throw away the good ones.
-4. Python decides phase changes, not the LLM:
-   - no fields missing → CONFIRMING;
-   - `confirm` → RECOMMENDING;
-   - `correction` / `reject` → back to COLLECTING.
-5. Sentiment: two frustrated turns in a row switch the prompt to shorter mode, which offers to skip a question or finish early.
-6. Save the record through the repository.
+1. Load the record and work on a copy: if the turn fails, the stored record stays exactly as it was and the student can repeat their message.
+2. Empty or over-2000-character input gets a fixed reply without calling the LLM. A conversation that ended without an interview (consent declined) gets a fixed "this conversation has ended".
+3. One Claude call with structured output returns a `TurnOutput`. The system prompt contains the static instructions plus the current state: phase, known values, pending fields, skipped fields, last turn's rejected values, recommendations given, and a frustration note after two frustrated turns in a row. The full transcript is sent as the message history, which gives the bot multi-turn memory.
+4. `apply()` merges the extracted values; rejected ones are stored so the next prompt asks again.
+5. Python decides phase changes, not the LLM:
+   - consent: agree → COLLECTING; decline or stop → DONE.
+   - collecting: refused skippable fields are marked skipped; once ready and something changed → CONFIRMING.
+   - confirming: a new value → confirm again; `confirm` → recommend → DONE; `reject` / `correction` without a value → COLLECTING.
+   - done: follow-up questions are answered from the recommendations; a profile correction → CONFIRMING again.
+   - `stop` at any point → DONE with a summary.
+6. Save through the repository, which rejects stale versions.
+
+**LLM calls per turn.** Collecting turns make one call. Transitions add dedicated calls so the student sees exactly what's stored: the confirmation message (one call), and on confirm the recommendation and the summary (two calls). Expect 2–3 calls on the confirming turn.
 
 ### Recommender
 
-- Python filters the catalog on `min_school_year`, `min_free_hours_required` and `excluded_specialization`.
-- A second structured call ranks what passes against `magic_orientation`, `learning_modality` and `interests`, returning `[{name, reason}]`.
-- Guard against made-up entries: drop any name that isn't in the filtered list.
-- If nothing passes the filters, skip the LLM and give a fixed explanation built from the filter reasons.
+- Python filters the catalog; a structured call ranks what passes against `magic_orientation`, `learning_modality` and `interests`, returning `[{name, reason}]` and a spoken reply.
+- Names not in the filtered list are dropped. If any are dropped, the LLM's reply is discarded (it may mention them) and a fixed English message lists the valid ones.
+- If the call fails, the deterministic ranking is used instead.
+- If nothing passes the filters, an LLM call explains the reasons in the student's language; a fixed English message is used if that call fails.
 
 ### Summary
 
-When the conversation ends, one LLM call produces the key points. The profile and recommendations are copied in from the record, not regenerated, so the summary can't contradict them.
+When the conversation ends, one LLM call writes 3–6 key points in English for school staff. The profile and recommendations are copied in from the record, so the summary can't contradict them. If the call fails, the summary stays empty and the student's turn still succeeds.
 
 ### Claude adapter (`llm/claude.py`)
 
-- Model: `claude-opus-5-5`, set by an environment variable. Use `effort: "low"` for interview turns, since this is chat and latency matters.
-- `timeout=20s`, and the SDK's built-in `max_retries=2`.
-- Handle errors with specific SDK exception types rather than one catch-all: rate limits and server errors are retried, a 400 is a bug and isn't. If a call still fails, the bot sends a fixed "sorry, could you repeat that?" without changing the record.
-- Check `stop_reason` before reading the output. On `refusal`, send a fixed reply.
-- Server-side `fallbacks: "default"` reroutes a refused request automatically. It's on by default and is one line to remove.
-- If the output fails validation, retry once with the validation error attached.
+- Model `claude-opus-5-5` at `effort: "low"` (chat, latency matters), configurable through environment variables.
+- `messages.create` with `output_config.format` (JSON schema from the SDK's `transform_schema`), validated with Pydantic in the adapter. If validation fails (e.g. truncated output), one retry with the error attached.
+- 20 s timeout and the SDK's built-in retries (`max_retries=2`) for timeouts, connection errors, 429 and 5xx.
+- SDK errors map to two kinds: configuration errors (bad or missing key, bad request, unknown model) stop the app with a clear message; recoverable errors (unavailable, refusal, invalid output) only fail that turn with a fixed reply.
+- `stop_reason` is checked before reading the output. Server-side `fallbacks: "default"` reroutes a refused request automatically.
+- Each call logs latency, token counts and the request id.
+- The API key is read from `.env` by the settings and passed to the client, because the SDK only reads the real environment.
 
 ### Speech
 
@@ -97,17 +105,17 @@ When the conversation ends, one LLM call produces the key points. The profile an
 
 | Piece | Choice |
 |---|---|
-| Python and dependencies | `uv`, Python 3.12, `anthropic`, `pydantic`, `pydantic-settings`, `fastapi`, `uvicorn`, `python-multipart`, `httpx`, `boto3` |
+| Python and dependencies | Python 3.12 in `.venv` (`make install`), `anthropic`, `pydantic`, `pydantic-settings`, `fastapi`, `uvicorn`, `python-multipart`, `httpx`, `boto3` |
 | Voice | The React frontend in the browser (see section 4). No audio libraries on the Python side |
 | Frontend | Node 20+, Vite + React + TypeScript; `npm run dev` on :5173 |
-| Storage | `STORAGE=file` saves to `./conversations/{id}.json` |
-| Commands | `make run-text`, `make serve` (FastAPI on :8000), `make frontend` (Vite on :5173), `make test` |
+| Storage | `STORAGE=file` saves to `./conversations/{id}.json`. Writes go to a temp file then are renamed (no half-written records), and only generated ids are accepted (no path traversal) |
+| Commands | `make run-text` (`ARGS=-v` shows phase and profile, `ARGS="--resume ID"` continues a conversation), `make serve` (FastAPI on :8000), `make frontend` (Vite on :5173), `make test` |
 | Docker | `docker compose up` runs the API (`STORAGE=file`, mounted volume) and the frontend. Add LocalStack only if you want to test S3 storage locally |
-| Code quality | `ruff` + `mypy`; a pre-commit hook is optional |
+| Code quality | `ruff` + `mypy --strict` (`make lint typecheck`) |
 
 ### Tests
 
-No network; the fake LLM returns scripted `TurnOutput`s.
+No network: the fake LLM returns queued outputs or errors and records each call's prompts; the Claude adapter is tested against a fake SDK client.
 
 - each Pydantic field's validation;
 - merging partial values and corrections;

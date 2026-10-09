@@ -2,7 +2,7 @@ PYTHON ?= python3.12
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: install test lint typecheck clean
+.PHONY: install test lint typecheck run-text clean
 
 $(BIN)/python:
 	$(PYTHON) -m venv $(VENV)
@@ -20,6 +20,9 @@ lint:
 
 typecheck:
 	$(BIN)/mypy src
+
+run-text:
+	$(BIN)/python -m agent.interfaces.cli $(ARGS)
 
 clean:
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache .coverage

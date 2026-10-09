@@ -36,6 +36,7 @@ class Intent(StrEnum):
     REJECT = "reject"
     OFF_TOPIC = "off_topic"
     REFUSE = "refuse"
+    STOP = "stop"
 
 
 class Sentiment(StrEnum):
@@ -125,6 +126,9 @@ class TurnOutput(BaseModel):
     extracted: ExtractedFields
     reply: str
     intent: Intent
+    refused_fields: list[str] = Field(
+        default_factory=list, description="Fields the student declined to answer this turn"
+    )
     sentiment: Sentiment
     language: str = Field(description="ISO 639-1 code of the student's language, e.g. 'en'")
 
@@ -132,6 +136,21 @@ class TurnOutput(BaseModel):
 class Recommendation(BaseModel):
     name: str
     reason: str
+
+
+class ReplyOutput(BaseModel):
+    """Structured output for calls that only produce a message to the student."""
+
+    reply: str
+
+
+class RecommendationOutput(BaseModel):
+    recommendations: list[Recommendation]
+    reply: str
+
+
+class SummaryOutput(BaseModel):
+    key_points: list[str]
 
 
 class Message(BaseModel):
@@ -152,9 +171,10 @@ class ConversationRecord(BaseModel):
     transcript: list[Message] = Field(default_factory=list)
     profile: StudentProfile = Field(default_factory=StudentProfile)
     field_errors: dict[str, str] = Field(default_factory=dict)
+    skipped_fields: list[str] = Field(default_factory=list)
     sentiment_history: list[Sentiment] = Field(default_factory=list)
     recommendations: list[Recommendation] = Field(default_factory=list)
-    summary: str | None = None
+    summary: list[str] | None = Field(default=None, description="Key points for school staff")
     model: str | None = None
     prompt_version: str | None = None
 

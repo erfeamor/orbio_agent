@@ -6,7 +6,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from agent.domain.models import LearningModality, MagicOrientation, Specialization, StudentProfile
+from agent.domain.models import (
+    LearningModality,
+    MagicOrientation,
+    Recommendation,
+    Specialization,
+    StudentProfile,
+)
 
 
 class Category(StrEnum):
@@ -77,3 +83,26 @@ def filter_catalog(entries: list[CatalogEntry], profile: StudentProfile) -> Filt
         else:
             result.eligible.append(entry)
     return result
+
+
+def rank_by_ideal_profile(
+    entries: list[CatalogEntry], profile: StudentProfile, limit: int
+) -> list[Recommendation]:
+    """Deterministic ranking by ideal-profile matches; the fallback when the LLM is unavailable."""
+
+    def matches(entry: CatalogEntry) -> list[str]:
+        found = []
+        if entry.ideal_profile.magic_orientation is profile.magic_orientation:
+            found.append(f"suits your {entry.ideal_profile.magic_orientation.value.lower()} drive")
+        if entry.ideal_profile.learning_modality is profile.learning_modality:
+            found.append(f"fits your {entry.ideal_profile.learning_modality.value.lower()} style")
+        return found
+
+    ranked = sorted(entries, key=lambda e: len(matches(e)), reverse=True)[:limit]
+    return [
+        Recommendation(
+            name=entry.name,
+            reason=" and ".join(matches(entry)).capitalize() or "Open to you",
+        )
+        for entry in ranked
+    ]
